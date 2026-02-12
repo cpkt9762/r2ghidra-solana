@@ -30,6 +30,7 @@ private:
 	FunctionSymbol *registerFunction(RAnalFunction *fcn) const;
 	Symbol *registerFlag(RFlagItem *flag) const;
 	Symbol *registerGlobalVar(RFlagItem *glob, const char *type_str) const;
+	FunctionSymbol *registerExternFunction(const char *name, const Address &addr) const;
 	Symbol *queryR2Absolute(ut64 addr, bool contain) const;
 	Symbol *queryR2(const Address &addr, bool contain) const;
 	LabSymbol *queryR2FunctionLabel(const Address &addr) const;

@@ -12,7 +12,6 @@
 #include <r_core.h>
 
 #include "R2Utils.h"
-
 R2Scope::R2Scope(R2Architecture *arch)
 		: Scope (0, "", arch, this),
 		  arch (arch),
@@ -682,6 +681,63 @@ FunctionSymbol *R2Scope::registerFunction(RAnalFunction *fcn) const {
 	return funcsym;
 }
 
+FunctionSymbol *R2Scope::registerExternFunction(const char *name, const Address &addr) const {
+	Document doc;
+	doc.setName ("mapsym");
+	
+	auto functionElement = child (&doc, "function", {
+		{ "name", name },
+		{ "size", "1" },
+		{ "id", hex(makeId()) }
+	});
+
+	childAddr (functionElement, "addr", addr);
+
+	auto localDbElement = child (functionElement, "localdb", {
+		{ "lock", "false" },
+		{ "main", "stack" }
+	});
+
+	auto scopeElement = child(localDbElement, "scope", {
+		{ "name", name }
+	});
+
+	auto parentElement = child(scopeElement, "parent", {
+		{"id", hex (uniqueId)}
+	});
+	child (parentElement, "val");
+	child (scopeElement, "rangelist");
+	child (scopeElement, "symbollist");
+
+	auto returnsymElement = child (functionElement, "returnsym", {
+		{ "typelock", "true" }
+	});
+	
+	child (returnsymElement, "addr", {
+		{ "space", "register" },
+		{ "offset", "0x0" }
+	});
+	
+	child (returnsymElement, "typeref", {
+		{ "name", "uint64_t" }
+	});
+
+	child (&doc, "addr", {
+		{ "space", addr.getSpace()->getName() },
+		{ "offset", hex(addr.getOffset()) }
+	});
+
+	child (&doc, "rangelist");
+
+	try {
+		XmlDecode dec(arch, &doc);
+		auto sym = cache->addMapSym (dec);
+		return dynamic_cast<FunctionSymbol *>(sym);
+	} catch (const DecoderError &e) {
+		return nullptr;
+	}
+}
+
 Symbol *R2Scope::registerFlag(RFlagItem *flag) const {
 	RCoreLock core (arch->getCore ());
 
@@ -811,11 +867,31 @@ Symbol *R2Scope::registerGlobalVar(RFlagItem *glob, const char *type_str) const 
 	return symbol;
 }
 
+static const char *extract_syscall_name(const char *flag_name) {
+	if (r_str_startswith (flag_name, "reloc.")) {
+		return flag_name + 6;
+	}
+	if (r_str_startswith (flag_name, "sym.imp.")) {
+		return flag_name + 8;
+	}
+	if (r_str_startswith (flag_name, "imp.")) {
+		return flag_name + 4;
+	}
+	return nullptr;
+}
+
+static bool is_sbpf_syscall_flag(const char *flag_name) {
+	const char *name = extract_syscall_name (flag_name);
+	if (!name) {
+		return false;
+	}
+	return r_str_startswith (name, "sol_") || !strcmp (name, "abort");
+}
+
 Symbol *R2Scope::queryR2Absolute(ut64 addr, bool contain) const {
 	RCoreLock core (arch->getCore ());
 
 	RAnalFunction *fcn = r_anal_get_function_at (core->anal, addr);
-	// This can cause functions to be registered twice (hello-arm test)
 	if (!fcn && contain) {
 		RList *fcns = r_anal_get_functions_in (core->anal, addr);
 		if (!r_list_empty (fcns)) {
@@ -835,7 +911,6 @@ Symbol *R2Scope::queryR2Absolute(ut64 addr, bool contain) const {
 		}
 	}
 
-	// TODO: correctly handle contain for flags
 	const RList *flags = r_flag_get_list (core->flags, addr);
 	if (flags) {
 		RListIter *iter;
@@ -844,6 +919,16 @@ Symbol *R2Scope::queryR2Absolute(ut64 addr, bool contain) const {
 			auto flag = reinterpret_cast<RFlagItem *>(pos);
 			if (flag->space && flag->space->name && !strcmp (flag->space->name, R_FLAGS_FS_SECTIONS)) {
 				continue;
+			}
+			if (is_sbpf_syscall_flag (flag->name)) {
+				const char *name = extract_syscall_name (flag->name);
+				if (name) {
+#if R2_VERSION_NUMBER >= 50909
+					return registerExternFunction (name, Address(arch->getDefaultCodeSpace(), flag->addr));
+#else
+					return registerExternFunction (name, Address(arch->getDefaultCodeSpace(), flag->offset));
+#endif
+				}
 			}
 			return registerFlag (flag);
 		}
@@ -908,8 +993,6 @@ Funcdata *R2Scope::findFunction(const Address &addr) const {
 	if (fd) {
 		return fd;
 	}
-	// Check if this address has already been queried,
-	// (returning a symbol other than a function_symbol)
 	if (cache->findContainer(addr, 1, Address ())) {
 		return nullptr;
 	}

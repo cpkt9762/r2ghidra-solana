@@ -82,10 +82,71 @@ void R2PrintC::pushUnnamedLocation(const Address &addr, const Varnode *vn, const
 	}
 }
 
-/*
-void R2PrintC::push_integer(uintb val,int4 sz,bool sign,tagtype tag, const Varnode *vn,const PcodeOp *op) {
+static struct {
+	uint32_t hash;
+	const char *name;
+} sbpf_syscall_hashes[] = {
+	{0xb6fc1a11U, "abort"},
+	{0x686093bbU, "sol_panic_"},
+	{0x207559bdU, "sol_log_"},
+	{0x5c2a3178U, "sol_log_64_"},
+	{0x52ba5096U, "sol_log_compute_units_"},
+	{0x7ef088caU, "sol_log_pubkey"},
+	{0x7317b434U, "sol_log_data"},
+	{0x9377323cU, "sol_create_program_address"},
+	{0x48504a38U, "sol_try_find_program_address"},
+	{0x11f49d86U, "sol_sha256"},
+	{0xd7793abbU, "sol_keccak256"},
+	{0x174c5122U, "sol_blake3"},
+	{0xc4947c21U, "sol_poseidon"},
+	{0x17e40350U, "sol_secp256k1_recover"},
+	{0xaa2607caU, "sol_curve_validate_point"},
+	{0xdd1c41a6U, "sol_curve_group_op"},
+	{0x60a40880U, "sol_curve_multiscalar_mul"},
+	{0xf111a47eU, "sol_curve_pairing_map"},
+	{0x080c98b0U, "sol_curve_decompress"},
+	{0xae0c318bU, "sol_alt_bn128_group_op"},
+	{0x334fd5edU, "sol_alt_bn128_compression"},
+	{0x780e4c15U, "sol_big_mod_exp"},
+	{0xd56b5fe9U, "sol_get_clock_sysvar"},
+	{0x23a29a61U, "sol_get_epoch_schedule_sysvar"},
+	{0xbf7188f6U, "sol_get_rent_sysvar"},
+	{0x3b97b73cU, "sol_get_fees_sysvar"},
+	{0xfdba2b3bU, "sol_get_epoch_rewards_sysvar"},
+	{0x188a0031U, "sol_get_last_restart_slot"},
+	{0x13c1b505U, "sol_get_sysvar"},
+	{0x5be92f4aU, "sol_get_epoch_stake"},
+	{0x717cc4a3U, "sol_memcpy_"},
+	{0x434371f8U, "sol_memmove_"},
+	{0x5fdcde31U, "sol_memcmp_"},
+	{0x3770fb22U, "sol_memset_"},
+	{0x83f00e8fU, "sol_alloc_free_"},
+	{0xa22b9c85U, "sol_invoke_signed_c"},
+	{0xd7449092U, "sol_invoke_signed_rust"},
+	{0xa226d3ebU, "sol_set_return_data"},
+	{0x5d2245e4U, "sol_get_return_data"},
+	{0xadb8efc8U, "sol_get_processed_sibling_instruction"},
+	{0x85532d94U, "sol_get_stack_height"},
+	{0xedef5aeeU, "sol_remaining_compute_units"},
+	{0, nullptr}
+};
+
+static const char *get_sbpf_syscall_name(uint64_t addr) {
+	uint32_t hash = (uint32_t)addr;
+	for (int i = 0; sbpf_syscall_hashes[i].name; i++) {
+		if (sbpf_syscall_hashes[i].hash == hash) {
+			return sbpf_syscall_hashes[i].name;
+		}
+	}
+	return nullptr;
 }
 
-void R2PrintC::pushConstant(uintb val,const Datatype *ct,tagtype tag, const Varnode *vn, const PcodeOp *op) {
+string R2PrintC::genericFunctionName(const Address &addr) {
+	if (addr.getSpace()->getName() == "syscall") {
+		const char *name = get_sbpf_syscall_name(addr.getOffset());
+		if (name) {
+			return string(name);
+		}
+	}
+	return PrintC::genericFunctionName(addr);
 }
-*/
