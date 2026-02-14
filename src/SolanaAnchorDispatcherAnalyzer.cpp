@@ -1248,8 +1248,11 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 
 	RCoreLock core(arch->getCore());
 	ut64 dispatcher_addr = func->getAddress().getOffset();
-	if (core) {
-		dispatcher_addr = core->addr;
+	if (core && core->anal) {
+		RAnalFunction *dispatcher = r_anal_get_fcn_in(core->anal, dispatcher_addr, R_ANAL_FCN_TYPE_NULL);
+		if (dispatcher) {
+			dispatcher_addr = dispatcher->addr;
+		}
 	}
 	rename_dispatcher_if_needed(core, dispatcher_addr);
 	apply_dispatcher_comment(
