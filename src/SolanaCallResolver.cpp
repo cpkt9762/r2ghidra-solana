@@ -10,6 +10,13 @@
 
 using namespace ghidra;
 
+static uint32_t read_le32(const ut8 *p) {
+	return static_cast<uint32_t>(p[0])
+		| (static_cast<uint32_t>(p[1]) << 8)
+		| (static_cast<uint32_t>(p[2]) << 16)
+		| (static_cast<uint32_t>(p[3]) << 24);
+}
+
 static struct {
 	uint32_t hash;
 	const char *name;
@@ -142,26 +149,105 @@ static std::string resolve_sbpf_call_name_from_reloc(R2Architecture *arch, const
 	return {};
 }
 
-static std::string resolve_sbpf_internal_call_name(R2Architecture *arch, const Address &call_addr, uint64_t imm) {
-	const int64_t rel = static_cast<int64_t> (static_cast<int32_t> (imm));
-	const ut64 target = call_addr.getOffset () + 8 + (rel * 8);
-	RCoreLock core (arch->getCore ());
-	RAnalFunction *fcn = r_anal_get_function_at (core->anal, target);
+static bool is_executable_target(RCore *core, ut64 addr) {
+	if (!core || !core->bin) {
+		return false;
+	}
+	const RList *sections = r_bin_get_sections (core->bin);
+	if (!sections) {
+		return false;
+	}
+	RListIter *iter;
+	void *pos;
+	r_list_foreach (sections, iter, pos) {
+		auto *sec = reinterpret_cast<RBinSection *>(pos);
+		if (!sec) {
+			continue;
+		}
+		ut64 start = sec->vaddr ? sec->vaddr : sec->paddr;
+		ut64 size = sec->vsize ? sec->vsize : sec->size;
+		if (size == 0) {
+			continue;
+		}
+		if (!(sec->perm & R_PERM_X)) {
+			continue;
+		}
+		if (addr >= start && addr < start + size) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static std::string name_for_target_or_autocreate(RCore *core, ut64 target) {
+	RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, target, R_ANAL_FCN_TYPE_NULL);
+	if (!fcn && is_executable_target (core, target)) {
+		r_anal_create_function (core->anal, nullptr, target, R_ANAL_FCN_TYPE_FCN, nullptr);
+		fcn = r_anal_get_fcn_in (core->anal, target, R_ANAL_FCN_TYPE_NULL);
+	}
 	if (fcn && fcn->name) {
 		return std::string (fcn->name);
 	}
 	const RList *flags = r_flag_get_list (core->flags, target);
-	if (!flags) {
-		return {};
+	if (flags) {
+		RListIter *iter;
+		void *pos;
+		r_list_foreach (flags, iter, pos) {
+			auto flag = reinterpret_cast<RFlagItem *>(pos);
+			if (flag && flag->name) {
+				return std::string (flag->name);
+			}
+		}
 	}
-	RListIter *iter;
-	void *pos;
-	r_list_foreach (flags, iter, pos) {
-		auto flag = reinterpret_cast<RFlagItem *>(pos);
-		if (!flag || !flag->name) {
+	return {};
+}
+
+static bool decode_sbpf_call_imm32(RCore *core, ut64 call_addr, uint32_t *imm) {
+	if (!core || !core->io || !imm) {
+		return false;
+	}
+	ut8 bytes[8] = {0};
+	if (r_io_read_at (core->io, call_addr, bytes, sizeof (bytes)) != static_cast<int> (sizeof (bytes))) {
+		return false;
+	}
+	if (bytes[0] != 0x85) {
+		return false;
+	}
+	*imm = read_le32 (bytes + 4);
+	return true;
+}
+
+static std::string resolve_sbpf_internal_call_name(R2Architecture *arch, const Address &call_addr, uint64_t imm_hint) {
+	RCoreLock core (arch->getCore ());
+	std::vector<int64_t> rels;
+	uint32_t imm32 = 0;
+	if (decode_sbpf_call_imm32 (core, call_addr.getOffset (), &imm32)) {
+		// Real Solana syscall hashes are encoded in imm32. If matched, this is not an internal call.
+		if (get_sbpf_syscall_name (imm32)) {
+			return {};
+		}
+		rels.push_back (static_cast<int64_t> (static_cast<int32_t> (imm32)));
+	} else {
+		// Fallback path when raw instruction bytes cannot be read.
+		rels.push_back (static_cast<int64_t> (static_cast<int32_t> (imm_hint)));
+		if (imm_hint <= 0xffff) {
+			rels.push_back (static_cast<int64_t> (static_cast<int16_t> (imm_hint)));
+		}
+	}
+	std::sort (rels.begin (), rels.end ());
+	rels.erase (std::unique (rels.begin (), rels.end ()), rels.end ());
+	const int64_t call_base = static_cast<int64_t> (call_addr.getOffset () + 8);
+	for (const int64_t rel : rels) {
+		const int64_t delta = rel * 8;
+		const int64_t target_signed = call_base + delta;
+		if (target_signed < 0) {
 			continue;
 		}
-		return std::string (flag->name);
+		const ut64 target = static_cast<ut64> (target_signed);
+		std::string name = name_for_target_or_autocreate (core, target);
+		if (!name.empty ()) {
+			return name;
+		}
 	}
 	return {};
 }
@@ -182,13 +268,21 @@ std::string resolve_sbpf_call_name(R2Architecture *arch, const PcodeOp *op) {
 		FuncCallSpecs *fc = FuncCallSpecs::getFspecFromConst(target->getAddr());
 		if (fc) {
 			if (!fc->getName().empty()) {
-				return fc->getName();
+				// Ghidra auto-generated placeholders like func_0x... should not
+				// block Solana-specific resolution paths.
+				if (!r_str_startswith (fc->getName().c_str (), "func_0x")) {
+					return fc->getName();
+				}
 			}
 			const Address entry = fc->getEntryAddress();
 			if (entry.getSpace() && entry.getSpace()->getName() == "syscall") {
 				const char *name = get_sbpf_syscall_name(entry.getOffset());
 				if (name) {
 					return std::string(name);
+				}
+				std::string internal = resolve_sbpf_internal_call_name(arch, op->getAddr(), entry.getOffset());
+				if (!internal.empty()) {
+					return internal;
 				}
 			}
 		}

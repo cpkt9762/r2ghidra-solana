@@ -109,16 +109,19 @@ void R2PrintC::opCall(const PcodeOp *op) {
 	try {
 		auto *arch = dynamic_cast<R2Architecture *>(glb);
 		const auto *hint = arch ? arch->findSolanaStringFromPtrLenHint(op->getAddr()) : nullptr;
-		if (hint && hint->replace_slot > 0 && hint->replace_slot < op->numInput()) {
-			const std::string call_name = resolveCurrentCallName(op);
-			if (!call_name.empty()) {
-				pushOp(&function_call, op);
-				pushAtom(Atom(call_name, functoken, EmitMarkup::funcname_color, op, (const Funcdata *)0));
-				const int4 count = op->numInput() - 1;
-				if (count > 0) {
-					for (int4 i = 0; i < count - 1; ++i) {
-						pushOp(&comma, op);
-					}
+		const bool has_hint_slot = hint && hint->replace_slot > 0 && hint->replace_slot < op->numInput();
+		const std::string call_name = resolveCurrentCallName(op);
+		if (!call_name.empty()) {
+			pushOp(&function_call, op);
+			pushAtom(Atom(call_name, functoken, EmitMarkup::funcname_color, op, (const Funcdata *)0));
+			const int4 count = op->numInput() - 1;
+			if (count > 0) {
+				for (int4 i = 0; i < count - 1; ++i) {
+					pushOp(&comma, op);
+				}
+				if (has_hint_slot) {
+					// For explicit ptr+len string replacement, keep the original
+					// insertion order to preserve stable argument rendering.
 					for (int4 i = 1; i < op->numInput(); ++i) {
 						if (i == hint->replace_slot) {
 							pushAtom(Atom(hint->quoted, vartoken, EmitMarkup::const_color,
@@ -128,10 +131,14 @@ void R2PrintC::opCall(const PcodeOp *op) {
 						}
 					}
 				} else {
-					pushAtom(Atom(EMPTY_STRING, blanktoken, EmitMarkup::no_color));
+					// Keep PrintC argument emission order (reverse push) so final
+					// printed argument order and prototype matching stay correct.
+					for (int4 i = op->numInput() - 1; i >= 1; --i) {
+						pushVn(op->getIn(i), op, mods);
+					}
 				}
 			} else {
-				PrintC::opCall(op);
+				pushAtom(Atom(EMPTY_STRING, blanktoken, EmitMarkup::no_color));
 			}
 		} else {
 			PrintC::opCall(op);
