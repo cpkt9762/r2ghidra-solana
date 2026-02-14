@@ -962,6 +962,38 @@ static void apply_ix_signature_and_comment(
 	r_meta_set_string(core->anal, R_META_TYPE_COMMENT, target, comment.str().c_str());
 }
 
+static void apply_callsite_comment(
+	RCore *core,
+	const CallCandidate *candidate,
+	const std::string &leaf_name,
+	ut64 disc)
+{
+	if (!core || !core->anal || !candidate || !candidate->op || leaf_name.empty()) {
+		return;
+	}
+	const ut64 at = candidate->op->getSeqNum().getAddr().getOffset();
+	if (!at) {
+		return;
+	}
+	std::ostringstream comment;
+	comment << "solana.anchor.call " << leaf_name << " disc=" << format_disc_hex(disc);
+	const std::string call_cmt = comment.str();
+	const char *existing = r_meta_get_string(core->anal, R_META_TYPE_COMMENT, at);
+	if (existing && *existing) {
+		if (strstr(existing, call_cmt.c_str())) {
+			return;
+		}
+		std::string merged = existing;
+		if (!merged.empty()) {
+			merged += " | ";
+		}
+		merged += call_cmt;
+		r_meta_set_string(core->anal, R_META_TYPE_COMMENT, at, merged.c_str());
+		return;
+	}
+	r_meta_set_string(core->anal, R_META_TYPE_COMMENT, at, call_cmt.c_str());
+}
+
 static int infer_stable_call_arity(const std::vector<const CallCandidate *> &callsites) {
 	if (callsites.empty()) {
 		return -1;
@@ -1169,5 +1201,11 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 		const auto arity_it = target_to_arity.find(target);
 		const int arity = arity_it != target_to_arity.end() ? arity_it->second : -1;
 		apply_ix_signature_and_comment(core, target, disc, leaf_name, meta, arity);
+		auto calls_it = calls_by_target.find(target);
+		if (calls_it != calls_by_target.end()) {
+			for (const CallCandidate *candidate : calls_it->second) {
+				apply_callsite_comment(core, candidate, leaf_name, disc);
+			}
+		}
 	}
 }
