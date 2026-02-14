@@ -1070,6 +1070,13 @@ static void apply_callsite_comment(
 	r_meta_set_string(core->anal, R_META_TYPE_COMMENT, at, call_cmt.c_str());
 }
 
+static ut64 callsite_addr(const CallCandidate *candidate) {
+	if (!candidate || !candidate->op) {
+		return 0;
+	}
+	return candidate->op->getSeqNum().getAddr().getOffset();
+}
+
 static int infer_stable_call_arity(const std::vector<const CallCandidate *> &callsites) {
 	if (callsites.empty()) {
 		return -1;
@@ -1184,6 +1191,7 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 
 	std::unordered_map<ut64, ut64> target_to_disc;
 	std::unordered_map<ut64, int> target_to_arity;
+	std::unordered_map<ut64, ut64> callsite_to_disc;
 	std::unordered_set<ut64> unique_discs;
 	bool has_anchor_builtin = false;
 	for (const auto &it : calls_by_target) {
@@ -1198,19 +1206,23 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 		for (const CallCandidate *candidate : callsites) {
 			if (!candidate || !candidate->block) {
 				has_incomplete = true;
-				break;
+				continue;
 			}
 			std::array<int, kDiscriminatorLen> bytes;
 			if (!collect_discriminator_for_call(graph, candidate->block, arch, bytes)
 					|| !discriminator_complete(bytes)) {
 				has_incomplete = true;
-				break;
+				continue;
 			}
 			uint8_t raw[kDiscriminatorLen] = {0};
 			for (size_t i = 0; i < kDiscriminatorLen; ++i) {
 				raw[i] = static_cast<uint8_t>(bytes[i]);
 			}
 			const ut64 disc = read_le64(raw);
+			const ut64 at = callsite_addr(candidate);
+			if (at != 0) {
+				callsite_to_disc.emplace(at, disc);
+			}
 			if (!have_disc) {
 				have_disc = true;
 				resolved_disc = disc;
@@ -1218,7 +1230,6 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 			}
 			if (resolved_disc != disc) {
 				has_incomplete = true;
-				break;
 			}
 		}
 		if (!have_disc || has_incomplete) {
@@ -1262,6 +1273,7 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 		calls_by_target.size(),
 		unique_discs.size(),
 		idl_path);
+	std::unordered_set<ut64> annotated_callsites;
 	for (const auto &it : target_to_disc) {
 		const ut64 target = it.first;
 		const ut64 disc = it.second;
@@ -1284,7 +1296,33 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 		if (calls_it != calls_by_target.end()) {
 			for (const CallCandidate *candidate : calls_it->second) {
 				apply_callsite_comment(core, dispatcher_addr, candidate, leaf_name, disc);
+				const ut64 at = callsite_addr(candidate);
+				if (at != 0) {
+					annotated_callsites.insert(at);
+				}
 			}
 		}
+	}
+	for (const CallCandidate &candidate : candidates) {
+		const ut64 at = callsite_addr(&candidate);
+		if (at == 0 || annotated_callsites.find(at) != annotated_callsites.end()) {
+			continue;
+		}
+		auto disc_it = callsite_to_disc.find(at);
+		if (disc_it == callsite_to_disc.end()) {
+			continue;
+		}
+		const ut64 disc = disc_it->second;
+		auto name_it = disc_to_name.find(disc);
+		std::array<int, kDiscriminatorLen> disc_bytes;
+		disc_bytes.fill(0);
+		for (size_t i = 0; i < kDiscriminatorLen; ++i) {
+			disc_bytes[i] = static_cast<int>((disc >> (8 * i)) & 0xff);
+		}
+		const std::string leaf_name = (name_it != disc_to_name.end())
+			? name_it->second
+			: format_disc_fallback(disc_bytes);
+		apply_callsite_comment(core, dispatcher_addr, &candidate, leaf_name, disc);
+		annotated_callsites.insert(at);
 	}
 }
