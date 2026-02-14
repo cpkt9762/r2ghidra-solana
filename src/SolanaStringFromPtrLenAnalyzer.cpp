@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cctype>
 #include <iomanip>
+#include <limits.h>
 #include <limits>
 #include <sstream>
 #include <vector>
@@ -18,6 +19,16 @@
 using namespace ghidra;
 
 namespace {
+
+#if defined(MAXPATH)
+constexpr uintb kMaxStringBytes = static_cast<uintb>(MAXPATH);
+#elif defined(MAXPATHLEN)
+constexpr uintb kMaxStringBytes = static_cast<uintb>(MAXPATHLEN);
+#elif defined(PATH_MAX)
+constexpr uintb kMaxStringBytes = static_cast<uintb>(PATH_MAX);
+#else
+constexpr uintb kMaxStringBytes = 1024;
+#endif
 
 struct StringFromPtrLenRule {
 	const char *call_name;
@@ -183,7 +194,7 @@ bool read_solana_string_literal(
 	if (!arch) {
 		return false;
 	}
-	if (len == 0 || len > 2048 || len > static_cast<uintb>(std::numeric_limits<int>::max())) {
+	if (len == 0 || len > kMaxStringBytes || len > static_cast<uintb>(std::numeric_limits<int>::max())) {
 		return false;
 	}
 	std::vector<uint1> bytes(static_cast<size_t>(len));

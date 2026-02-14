@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <limits.h>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -51,6 +52,16 @@ struct DiscoveredString {
 	std::string text;
 	std::string string_flag_name;
 };
+
+#if defined(MAXPATH)
+constexpr ut64 kMaxStringBytes = static_cast<ut64>(MAXPATH);
+#elif defined(MAXPATHLEN)
+constexpr ut64 kMaxStringBytes = static_cast<ut64>(MAXPATHLEN);
+#elif defined(PATH_MAX)
+constexpr ut64 kMaxStringBytes = static_cast<ut64>(PATH_MAX);
+#else
+constexpr ut64 kMaxStringBytes = 1024;
+#endif
 
 bool read_virtual(RCore *core, ut64 addr, uint1 *buf, size_t len) {
 	if (!core || !core->io || !buf || len == 0 || len > static_cast<size_t>(std::numeric_limits<int>::max())) {
@@ -143,6 +154,49 @@ bool in_ranges(const std::vector<AddressRange> &ranges, ut64 addr, ut64 len) {
 		}
 	}
 	return false;
+}
+
+const AddressRange *find_containing_range(const std::vector<AddressRange> &ranges, ut64 addr) {
+	for (const auto &range : ranges) {
+		if (addr >= range.start && addr < range.start + range.size) {
+			return &range;
+		}
+	}
+	return nullptr;
+}
+
+bool read_nul_terminated_text(
+	RCore *core,
+	const std::vector<AddressRange> &rodata_ranges,
+	ut64 ptr,
+	std::vector<uint1> &out)
+{
+	const AddressRange *range = find_containing_range(rodata_ranges, ptr);
+	if (!range) {
+		return false;
+	}
+	const ut64 max_available = range->start + range->size - ptr;
+	if (max_available == 0) {
+		return false;
+	}
+	const ut64 read_len_u64 = std::min<ut64>(kMaxStringBytes, max_available);
+	if (read_len_u64 == 0 || read_len_u64 > static_cast<ut64>(std::numeric_limits<size_t>::max())) {
+		return false;
+	}
+	std::vector<uint1> buf(static_cast<size_t>(read_len_u64));
+	if (!read_virtual(core, ptr, buf.data(), buf.size())) {
+		return false;
+	}
+	auto nul_it = std::find(buf.begin(), buf.end(), 0);
+	if (nul_it == buf.end()) {
+		return false;
+	}
+	const size_t text_len = static_cast<size_t>(std::distance(buf.begin(), nul_it));
+	if (text_len == 0) {
+		return false;
+	}
+	out.assign(buf.begin(), nul_it);
+	return true;
 }
 
 bool looks_like_text_buffer(const std::vector<uint1> &buf) {
@@ -246,6 +300,30 @@ void apply_flag(
 	r_flag_set_inspace(core->flags, space, name.c_str(), addr, size);
 }
 
+DiscoveredString *register_discovered_string(
+	RCore *core,
+	std::unordered_map<PtrLenKey, DiscoveredString, PtrLenKeyHash> &by_ptr_len,
+	std::unordered_map<ut64, std::string> &value_to_symbol,
+	ut64 ptr,
+	ut64 len,
+	const std::vector<uint1> &bytes)
+{
+	const PtrLenKey key { ptr, len };
+	auto it = by_ptr_len.find(key);
+	if (it == by_ptr_len.end()) {
+		DiscoveredString d;
+		d.ptr = ptr;
+		d.len = len;
+		d.is_pubkey = looks_like_base58_pubkey(bytes);
+		d.text.assign(bytes.begin(), bytes.end());
+		d.string_flag_name = make_string_flag_name(ptr, d.text, d.is_pubkey);
+		it = by_ptr_len.emplace(key, std::move(d)).first;
+		apply_flag(core, R_FLAGS_FS_STRINGS, it->second.string_flag_name, ptr, static_cast<ut32>(len));
+	}
+	value_to_symbol.emplace(ptr, it->second.string_flag_name);
+	return &it->second;
+}
+
 void discover_strings_from_ptr_len_tables(
 	RCore *core,
 	const std::vector<AddressRange> &rodata_ranges,
@@ -265,7 +343,7 @@ void discover_strings_from_ptr_len_tables(
 		for (size_t off = 0; off + 16 <= table_bytes.size(); off += 8) {
 			ut64 ptr = read_u64_le(table_bytes.data() + off);
 			ut64 len = read_u64_le(table_bytes.data() + off + 8);
-			if (len == 0 || len > 4096 || !in_ranges(rodata_ranges, ptr, len)) {
+			if (len == 0 || len > kMaxStringBytes || !in_ranges(rodata_ranges, ptr, len)) {
 				continue;
 			}
 			std::vector<uint1> bytes(static_cast<size_t>(len));
@@ -275,24 +353,39 @@ void discover_strings_from_ptr_len_tables(
 			if (!looks_like_text_buffer(bytes)) {
 				continue;
 			}
-			const bool is_pubkey = looks_like_base58_pubkey(bytes);
-			const std::string text(bytes.begin(), bytes.end());
-			const PtrLenKey key { ptr, len };
-			auto it = by_ptr_len.find(key);
-			if (it == by_ptr_len.end()) {
-				DiscoveredString d;
-				d.ptr = ptr;
-				d.len = len;
-				d.is_pubkey = is_pubkey;
-				d.text = text;
-				d.string_flag_name = make_string_flag_name(ptr, text, is_pubkey);
-				it = by_ptr_len.emplace(key, std::move(d)).first;
-				apply_flag(core, R_FLAGS_FS_STRINGS, it->second.string_flag_name, ptr, static_cast<ut32>(len));
-				value_to_symbol.emplace(ptr, it->second.string_flag_name);
-			}
+			DiscoveredString *d = register_discovered_string(core, by_ptr_len, value_to_symbol, ptr, len, bytes);
 			const ut64 slot_addr = table.start + static_cast<ut64>(off);
-			const std::string ptr_name = make_ptr_flag_name(slot_addr, it->second.is_pubkey);
+			const std::string ptr_name = make_ptr_flag_name(slot_addr, d->is_pubkey);
 			apply_flag(core, R_FLAGS_FS_SYMBOLS, ptr_name, slot_addr, 16);
+			value_to_symbol.emplace(slot_addr, ptr_name);
+		}
+	}
+
+	for (const auto &table : table_ranges) {
+		if (table.size < 8 || table.size > static_cast<ut64>(std::numeric_limits<int>::max())) {
+			continue;
+		}
+		std::vector<uint1> table_bytes(static_cast<size_t>(table.size));
+		if (!read_virtual(core, table.start, table_bytes.data(), table_bytes.size())) {
+			continue;
+		}
+		for (size_t off = 0; off + 8 <= table_bytes.size(); off += 8) {
+			ut64 ptr = read_u64_le(table_bytes.data() + off);
+			if (!in_ranges(rodata_ranges, ptr, 1)) {
+				continue;
+			}
+			std::vector<uint1> bytes;
+			if (!read_nul_terminated_text(core, rodata_ranges, ptr, bytes)) {
+				continue;
+			}
+			if (bytes.size() > static_cast<size_t>(kMaxStringBytes) || !looks_like_text_buffer(bytes)) {
+				continue;
+			}
+			DiscoveredString *d = register_discovered_string(
+				core, by_ptr_len, value_to_symbol, ptr, bytes.size(), bytes);
+			const ut64 slot_addr = table.start + static_cast<ut64>(off);
+			const std::string ptr_name = make_ptr_flag_name(slot_addr, d->is_pubkey);
+			apply_flag(core, R_FLAGS_FS_SYMBOLS, ptr_name, slot_addr, 8);
 			value_to_symbol.emplace(slot_addr, ptr_name);
 		}
 	}
