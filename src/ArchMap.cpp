@@ -6,11 +6,107 @@
 #include "R2Utils.h"
 #include <map>
 #include <functional>
+#include <cstring>
 
 using namespace ghidra;
 
 std::string CompilerFromCore(RCore *core);
 static std::string NormalizeSleighIdForAvailableLangs(const std::string &id, const vector<LanguageDescription> &langs);
+
+static bool ContainsCaseInsensitive(const char *haystack, const char *needle) {
+	if (!haystack || !needle) {
+		return false;
+	}
+	std::string low_h = tolower (haystack);
+	std::string low_n = tolower (needle);
+	return low_h.find (low_n) != std::string::npos;
+}
+
+static bool IsLikelySolanaImport(const char *name) {
+	return name && (r_str_startswith (name, "sol_") || !strcmp (name, "abort"));
+}
+
+static bool LooksLikeSolanaBpf(RCore *core) {
+	if (!core || !core->bin) {
+		return false;
+	}
+	RBinInfo *info = r_bin_get_info (core->bin);
+	if (info) {
+		if (ContainsCaseInsensitive (info->machine, "solana")) {
+			return true;
+		}
+		if (ContainsCaseInsensitive (info->abi, "sbpf")) {
+			return true;
+		}
+	}
+	const RList *imports = r_bin_get_imports (core->bin);
+	if (!imports) {
+		return false;
+	}
+	RListIter *iter = nullptr;
+	void *pos = nullptr;
+	r_list_foreach (imports, iter, pos) {
+		auto *imp = reinterpret_cast<RBinImport *>(pos);
+		const char *name = (imp && imp->name) ? r_bin_name_tostring (imp->name) : nullptr;
+		if (IsLikelySolanaImport (name)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool LooksLikeSbpfV3Layout(RCore *core) {
+	if (!core || !core->bin) {
+		return false;
+	}
+	const RList *sections = r_bin_get_sections (core->bin);
+	if (!sections) {
+		return false;
+	}
+	bool rodata_high = false;
+	bool stack_high = false;
+	bool heap_high = false;
+	RListIter *iter = nullptr;
+	void *pos = nullptr;
+	r_list_foreach (sections, iter, pos) {
+		auto *sec = reinterpret_cast<RBinSection *>(pos);
+		if (!sec || !sec->name) {
+			continue;
+		}
+		if (!strcmp (sec->name, ".rodata") && sec->vaddr >= 0x100000000ULL) {
+			rodata_high = true;
+		} else if (!strcmp (sec->name, ".bss.stack") && sec->vaddr >= 0x200000000ULL) {
+			stack_high = true;
+		} else if (!strcmp (sec->name, ".bss.heap") && sec->vaddr >= 0x300000000ULL) {
+			heap_high = true;
+		}
+	}
+	return rodata_high || (stack_high && heap_high);
+}
+
+static std::string DetectSbpfFlavor(RCore *core) {
+	const char *asm_cpu = core ? r_config_get (core->config, "asm.cpu") : nullptr;
+	if (ContainsCaseInsensitive (asm_cpu, "v3")) {
+		return "v3";
+	}
+	if (ContainsCaseInsensitive (asm_cpu, "v0")) {
+		return "v0";
+	}
+	RBinInfo *info = core && core->bin ? r_bin_get_info (core->bin) : nullptr;
+	if (info) {
+		if (ContainsCaseInsensitive (info->cpu, "v3")
+			|| ContainsCaseInsensitive (info->abi, "v3")
+			|| ContainsCaseInsensitive (info->flags, "v3")) {
+			return "v3";
+		}
+		if (ContainsCaseInsensitive (info->cpu, "v0")
+			|| ContainsCaseInsensitive (info->abi, "v0")
+			|| ContainsCaseInsensitive (info->flags, "v0")) {
+			return "v0";
+		}
+	}
+	return LooksLikeSbpfV3Layout (core) ? "v3" : "v0";
+}
 
 template<typename T> class BaseMapper {
 	private:
@@ -282,6 +378,14 @@ std::string SleighIdFromCore(RCore *core) {
 		return "gcc";
 	}
 	const char *arch = r_config_get (core->config, "asm.arch");
+	if (arch && !strcmp (arch, "bpf")) {
+		const int bits = r_config_get_i (core->config, "asm.bits");
+		if (bits == 64 && LooksLikeSolanaBpf (core)) {
+			const std::string flavor = DetectSbpfFlavor (core);
+			const std::string id = std::string ("sBPF:LE:64:") + flavor + ":" + CompilerFromCore (core);
+			return NormalizeSleighIdForAvailableLangs (id, langs);
+		}
+	}
 	if (!strcmp (arch, "r2ghidra")) {
 		RArchConfig *ac = core->rasm->config;
 		return SleighIdFromSleighAsmConfig (core, ac->cpu, ac->bits, ac->big_endian, langs);
