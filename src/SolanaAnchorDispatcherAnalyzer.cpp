@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstring>
 #include <iomanip>
 #include <map>
 #include <queue>
@@ -45,6 +46,13 @@ struct CallCandidate {
 struct ByteConstraint {
 	int index = -1;
 	uint8_t value = 0;
+};
+
+struct InstructionMetadata {
+	std::string idl_name;
+	std::string normalized_name;
+	std::vector<std::string> args;
+	std::vector<std::string> accounts;
 };
 
 static bool try_resolve_constant_varnode(const Varnode *vn, uintb &out, int depth = 12) {
@@ -608,10 +616,81 @@ static bool decode_discriminator_array(const RJson *disc_json, ut64 &out_disc) {
 	return true;
 }
 
+static void collect_named_entries(const RJson *arr, std::vector<std::string> &out) {
+	if (!arr || arr->type != R_JSON_ARRAY) {
+		return;
+	}
+	for (size_t i = 0; i < arr->children.count; ++i) {
+		const RJson *item = r_json_item(arr, i);
+		const char *name = item ? r_json_get_str(item, "name") : nullptr;
+		if (!name || !*name) {
+			continue;
+		}
+		out.emplace_back(name);
+	}
+}
+
+static void collect_account_entries_recursive(
+	const RJson *arr,
+	std::vector<std::string> &out,
+	const std::string &prefix = std::string())
+{
+	if (!arr || arr->type != R_JSON_ARRAY) {
+		return;
+	}
+	for (size_t i = 0; i < arr->children.count; ++i) {
+		const RJson *item = r_json_item(arr, i);
+		if (!item || item->type != R_JSON_OBJECT) {
+			continue;
+		}
+		const char *name = r_json_get_str(item, "name");
+		std::string current = prefix;
+		if (name && *name) {
+			if (!current.empty()) {
+				current.push_back('.');
+			}
+			current += name;
+		}
+		const RJson *nested = r_json_get(item, "accounts");
+		if (nested && nested->type == R_JSON_ARRAY) {
+			collect_account_entries_recursive(nested, out, current);
+			continue;
+		}
+		if (!current.empty()) {
+			out.push_back(current);
+		}
+	}
+}
+
+static std::string list_preview(const std::vector<std::string> &items, size_t limit = 8) {
+	if (items.empty()) {
+		return std::string();
+	}
+	std::ostringstream out;
+	const size_t shown = std::min(items.size(), limit);
+	for (size_t i = 0; i < shown; ++i) {
+		if (i > 0) {
+			out << ",";
+		}
+		out << items[i];
+	}
+	if (items.size() > shown) {
+		out << ",+" << (items.size() - shown);
+	}
+	return out.str();
+}
+
+static std::string format_disc_hex(ut64 disc) {
+	std::ostringstream out;
+	out << "0x" << std::hex << std::setw(16) << std::setfill('0') << disc;
+	return out.str();
+}
+
 static void collect_instruction_mappings_from_idl(
 	const std::string &idl_path,
 	std::unordered_map<ut64, std::string> &disc_to_name,
-	std::set<std::string> &fallback_names)
+	std::set<std::string> &fallback_names,
+	std::unordered_map<ut64, InstructionMetadata> &disc_to_meta)
 {
 	if (idl_path.empty()) {
 		return;
@@ -637,10 +716,16 @@ static void collect_instruction_mappings_from_idl(
 			}
 			std::string normalized = is_lower_snake(name) ? name : to_snake_case(name);
 			if (!normalized.empty()) {
+				InstructionMetadata meta;
+				meta.idl_name = name;
+				meta.normalized_name = normalized;
+				collect_named_entries(r_json_get(item, "args"), meta.args);
+				collect_account_entries_recursive(r_json_get(item, "accounts"), meta.accounts);
 				ut64 disc = 0;
 				const RJson *disc_json = r_json_get(item, "discriminator");
 				if (decode_discriminator_array(disc_json, disc)) {
 					disc_to_name.emplace(disc, normalized);
+					disc_to_meta.emplace(disc, std::move(meta));
 				} else {
 					fallback_names.insert(normalized);
 				}
@@ -744,6 +829,49 @@ static void rename_target_if_needed(RCore *core, ut64 target, const std::string 
 	r_anal_function_rename(fcn, desired.c_str());
 }
 
+static void apply_ix_signature_and_comment(
+	RCore *core,
+	ut64 target,
+	ut64 disc,
+	const std::string &leaf_name,
+	const InstructionMetadata *meta)
+{
+	if (!core || !core->anal || leaf_name.empty()) {
+		return;
+	}
+	RAnalFunction *fcn = r_anal_get_fcn_in(core->anal, target, R_ANAL_FCN_TYPE_NULL);
+	if (!fcn || !fcn->name || !*fcn->name) {
+		return;
+	}
+	char *sig = r_str_newf("uint64_t %s(...);", fcn->name);
+	if (sig) {
+		r_anal_str_to_fcn(core->anal, fcn, sig);
+		free(sig);
+	}
+
+	std::ostringstream comment;
+	comment << "solana.anchor.ix " << leaf_name << " disc=" << format_disc_hex(disc);
+	if (meta) {
+		if (!meta->idl_name.empty() && meta->idl_name != leaf_name) {
+			comment << " idl=" << meta->idl_name;
+		}
+		std::string args_preview = list_preview(meta->args);
+		if (!args_preview.empty()) {
+			comment << " args=[" << args_preview << "]";
+		}
+		std::string accounts_preview = list_preview(meta->accounts);
+		if (!accounts_preview.empty()) {
+			comment << " accts=[" << accounts_preview << "]";
+		}
+	}
+
+	const char *existing = r_meta_get_string(core->anal, R_META_TYPE_COMMENT, target);
+	if (existing && *existing && !r_str_startswith(existing, "solana.anchor.ix ")) {
+		return;
+	}
+	r_meta_set_string(core->anal, R_META_TYPE_COMMENT, target, comment.str().c_str());
+}
+
 static std::vector<CallCandidate> collect_internal_call_candidates(Funcdata *func, R2Architecture *arch) {
 	std::vector<CallCandidate> out;
 	if (!func || !arch) {
@@ -809,10 +937,11 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 	}
 
 	std::unordered_map<ut64, std::string> disc_to_name;
+	std::unordered_map<ut64, InstructionMetadata> disc_to_meta;
 	add_builtin_anchor_mappings(disc_to_name);
 
 	std::set<std::string> instruction_names;
-	collect_instruction_mappings_from_idl(idl_path, disc_to_name, instruction_names);
+	collect_instruction_mappings_from_idl(idl_path, disc_to_name, instruction_names, disc_to_meta);
 	{
 		RCoreLock core(arch->getCore());
 		collect_instruction_names_from_binary(core, instruction_names);
@@ -900,5 +1029,8 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 			? name_it->second
 			: format_disc_fallback(disc_bytes);
 		rename_target_if_needed(core, target, leaf_name);
+		auto meta_it = disc_to_meta.find(disc);
+		const InstructionMetadata *meta = meta_it != disc_to_meta.end() ? &meta_it->second : nullptr;
+		apply_ix_signature_and_comment(core, target, disc, leaf_name, meta);
 	}
 }
