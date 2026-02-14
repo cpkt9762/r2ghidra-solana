@@ -898,7 +898,8 @@ static void apply_ix_signature_and_comment(
 	ut64 target,
 	ut64 disc,
 	const std::string &leaf_name,
-	const InstructionMetadata *meta)
+	const InstructionMetadata *meta,
+	int arity)
 {
 	if (!core || !core->anal || leaf_name.empty()) {
 		return;
@@ -907,14 +908,39 @@ static void apply_ix_signature_and_comment(
 	if (!fcn || !fcn->name || !*fcn->name) {
 		return;
 	}
-	char *sig = r_str_newf("uint64_t %s(...);", fcn->name);
-	if (sig) {
-		r_anal_str_to_fcn(core->anal, fcn, sig);
-		free(sig);
+	int effective_arity = arity;
+	if (effective_arity < 0) {
+		// Anchor ix handlers are context-driven and are typically called with one frame/context pointer.
+		effective_arity = 1;
+	}
+
+	std::ostringstream sig_text;
+	sig_text << "uint64_t " << fcn->name << "(";
+	if (effective_arity == 0) {
+		sig_text << "void";
+	} else if (effective_arity == 1) {
+		sig_text << "void *ctx";
+	} else if (effective_arity > 1 && effective_arity <= 16) {
+		for (int i = 0; i < effective_arity; ++i) {
+			if (i > 0) {
+				sig_text << ", ";
+			}
+			sig_text << "uint64_t arg" << i;
+		}
+	} else {
+		sig_text << "...";
+	}
+	sig_text << ");";
+	std::string sig_owned = sig_text.str();
+	if (!sig_owned.empty()) {
+		r_anal_str_to_fcn(core->anal, fcn, sig_owned.c_str());
 	}
 
 	std::ostringstream comment;
 	comment << "solana.anchor.ix " << leaf_name << " disc=" << format_disc_hex(disc);
+	if (effective_arity >= 0) {
+		comment << " arity=" << effective_arity;
+	}
 	if (meta) {
 		if (!meta->idl_name.empty() && meta->idl_name != leaf_name) {
 			comment << " idl=" << meta->idl_name;
@@ -934,6 +960,34 @@ static void apply_ix_signature_and_comment(
 		return;
 	}
 	r_meta_set_string(core->anal, R_META_TYPE_COMMENT, target, comment.str().c_str());
+}
+
+static int infer_stable_call_arity(const std::vector<const CallCandidate *> &callsites) {
+	if (callsites.empty()) {
+		return -1;
+	}
+	int stable = -1;
+	for (const CallCandidate *candidate : callsites) {
+		if (!candidate || !candidate->op) {
+			return -1;
+		}
+		const int4 nin = candidate->op->numInput();
+		if (nin < 1) {
+			return -1;
+		}
+		const int cur = static_cast<int>(nin - 1);
+		if (cur < 0 || cur > 16) {
+			return -1;
+		}
+		if (stable < 0) {
+			stable = cur;
+			continue;
+		}
+		if (stable != cur) {
+			return -1;
+		}
+	}
+	return stable;
 }
 
 static std::vector<CallCandidate> collect_internal_call_candidates(Funcdata *func, R2Architecture *arch) {
@@ -1021,6 +1075,7 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 	}
 
 	std::unordered_map<ut64, ut64> target_to_disc;
+	std::unordered_map<ut64, int> target_to_arity;
 	std::unordered_set<ut64> unique_discs;
 	bool has_anchor_builtin = false;
 	for (const auto &it : calls_by_target) {
@@ -1062,6 +1117,10 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 			continue;
 		}
 		target_to_disc.emplace(target, resolved_disc);
+		const int arity = infer_stable_call_arity(callsites);
+		if (arity >= 0) {
+			target_to_arity.emplace(target, arity);
+		}
 		unique_discs.insert(resolved_disc);
 		if (is_anchor_builtin_discriminator(resolved_disc)) {
 			has_anchor_builtin = true;
@@ -1107,6 +1166,8 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 		rename_target_if_needed(core, target, leaf_name);
 		auto meta_it = disc_to_meta.find(disc);
 		const InstructionMetadata *meta = meta_it != disc_to_meta.end() ? &meta_it->second : nullptr;
-		apply_ix_signature_and_comment(core, target, disc, leaf_name, meta);
+		const auto arity_it = target_to_arity.find(target);
+		const int arity = arity_it != target_to_arity.end() ? arity_it->second : -1;
+		apply_ix_signature_and_comment(core, target, disc, leaf_name, meta, arity);
 	}
 }
