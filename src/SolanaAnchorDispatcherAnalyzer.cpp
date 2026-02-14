@@ -630,6 +630,31 @@ static void collect_named_entries(const RJson *arr, std::vector<std::string> &ou
 	}
 }
 
+static bool json_truthy_property(const RJson *obj, const char *key) {
+	if (!obj || !key || !*key) {
+		return false;
+	}
+	const RJson *v = r_json_get(obj, key);
+	if (!v) {
+		return false;
+	}
+	switch (v->type) {
+	case R_JSON_BOOLEAN:
+	case R_JSON_INTEGER:
+		return v->num.u_value != 0;
+	case R_JSON_STRING:
+		if (!v->str_value) {
+			return false;
+		}
+		return !strcmp(v->str_value, "true")
+			|| !strcmp(v->str_value, "1")
+			|| !strcmp(v->str_value, "yes");
+	default:
+		break;
+	}
+	return false;
+}
+
 static void collect_account_entries_recursive(
 	const RJson *arr,
 	std::vector<std::string> &out,
@@ -657,6 +682,24 @@ static void collect_account_entries_recursive(
 			continue;
 		}
 		if (!current.empty()) {
+			const bool signer = json_truthy_property(item, "signer") || json_truthy_property(item, "isSigner");
+			const bool writable = json_truthy_property(item, "writable")
+				|| json_truthy_property(item, "isMut")
+				|| json_truthy_property(item, "mut");
+			const bool optional = json_truthy_property(item, "optional") || json_truthy_property(item, "isOptional");
+			if (signer || writable || optional) {
+				current.push_back('[');
+				if (signer) {
+					current.push_back('s');
+				}
+				if (writable) {
+					current.push_back('w');
+				}
+				if (optional) {
+					current.push_back('o');
+				}
+				current.push_back(']');
+			}
 			out.push_back(current);
 		}
 	}
