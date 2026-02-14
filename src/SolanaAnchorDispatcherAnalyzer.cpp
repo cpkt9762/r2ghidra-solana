@@ -1007,6 +1007,7 @@ static void apply_ix_signature_and_comment(
 
 static void apply_callsite_comment(
 	RCore *core,
+	ut64 dispatcher_addr,
 	const CallCandidate *candidate,
 	const std::string &leaf_name,
 	ut64 disc)
@@ -1017,6 +1018,38 @@ static void apply_callsite_comment(
 	const ut64 at = candidate->op->getSeqNum().getAddr().getOffset();
 	if (!at) {
 		return;
+	}
+	auto sanitize_label = [](const std::string &in) -> std::string {
+		std::string out;
+		out.reserve(in.size());
+		for (unsigned char ch : in) {
+			if (std::isalnum(ch)) {
+				out.push_back(static_cast<char>(ch));
+			} else {
+				out.push_back('_');
+			}
+		}
+		while (!out.empty() && out.front() == '_') {
+			out.erase(out.begin());
+		}
+		while (!out.empty() && out.back() == '_') {
+			out.pop_back();
+		}
+		if (out.empty()) {
+			out = "ix";
+		}
+		return out;
+	};
+	if (dispatcher_addr != 0) {
+		RAnalFunction *dispatcher = r_anal_get_fcn_in(core->anal, dispatcher_addr, R_ANAL_FCN_TYPE_NULL);
+		if (dispatcher) {
+			const std::string base = "case_" + sanitize_label(leaf_name);
+			if (!r_anal_function_set_label(dispatcher, base.c_str(), at)) {
+				std::ostringstream fallback;
+				fallback << base << "_" << std::hex << at;
+				r_anal_function_set_label(dispatcher, fallback.str().c_str(), at);
+			}
+		}
 	}
 	std::ostringstream comment;
 	comment << "solana.anchor.call " << leaf_name << " disc=" << format_disc_hex(disc);
@@ -1247,7 +1280,7 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 		auto calls_it = calls_by_target.find(target);
 		if (calls_it != calls_by_target.end()) {
 			for (const CallCandidate *candidate : calls_it->second) {
-				apply_callsite_comment(core, candidate, leaf_name, disc);
+				apply_callsite_comment(core, dispatcher_addr, candidate, leaf_name, disc);
 			}
 		}
 	}
