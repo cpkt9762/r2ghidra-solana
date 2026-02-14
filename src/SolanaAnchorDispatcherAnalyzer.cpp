@@ -592,7 +592,27 @@ static void add_builtin_anchor_mappings(std::unordered_map<ut64, std::string> &m
 	}
 }
 
-static void collect_instruction_names_from_idl(const std::string &idl_path, std::set<std::string> &out_names) {
+static bool decode_discriminator_array(const RJson *disc_json, ut64 &out_disc) {
+	if (!disc_json || disc_json->type != R_JSON_ARRAY || disc_json->children.count != kDiscriminatorLen) {
+		return false;
+	}
+	uint8_t raw[kDiscriminatorLen] = {0};
+	for (size_t i = 0; i < kDiscriminatorLen; ++i) {
+		const RJson *item = r_json_item(disc_json, i);
+		if (!item || item->type != R_JSON_INTEGER || item->num.u_value > 0xff) {
+			return false;
+		}
+		raw[i] = static_cast<uint8_t>(item->num.u_value);
+	}
+	out_disc = read_le64(raw);
+	return true;
+}
+
+static void collect_instruction_mappings_from_idl(
+	const std::string &idl_path,
+	std::unordered_map<ut64, std::string> &disc_to_name,
+	std::set<std::string> &fallback_names)
+{
 	if (idl_path.empty()) {
 		return;
 	}
@@ -617,7 +637,13 @@ static void collect_instruction_names_from_idl(const std::string &idl_path, std:
 			}
 			std::string normalized = is_lower_snake(name) ? name : to_snake_case(name);
 			if (!normalized.empty()) {
-				out_names.insert(normalized);
+				ut64 disc = 0;
+				const RJson *disc_json = r_json_get(item, "discriminator");
+				if (decode_discriminator_array(disc_json, disc)) {
+					disc_to_name.emplace(disc, normalized);
+				} else {
+					fallback_names.insert(normalized);
+				}
 			}
 		}
 	}
@@ -774,7 +800,7 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 	add_builtin_anchor_mappings(disc_to_name);
 
 	std::set<std::string> instruction_names;
-	collect_instruction_names_from_idl(idl_path, instruction_names);
+	collect_instruction_mappings_from_idl(idl_path, disc_to_name, instruction_names);
 	{
 		RCoreLock core(arch->getCore());
 		collect_instruction_names_from_binary(core, instruction_names);
