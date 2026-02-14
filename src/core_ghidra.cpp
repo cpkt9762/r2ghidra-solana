@@ -7,6 +7,7 @@
 #include "SleighAsm.h"
 #include "ArchMap.h"
 #include "PcodeFixupPreprocessor.h"
+#include "SolanaGlobalPtrStringAnalyzer.h"
 #include "SolanaInputOffsetAnalyzer.h"
 #include "SolanaStringFromPtrLenAnalyzer.h"
 #include "r2ghidra.h"
@@ -195,6 +196,7 @@ static void Decompile(RCore *core, ut64 addr, DecompileMode mode, std::stringstr
 		action->reset (*func);
 		res = action->perform (*func);
 		SolanaInputOffsetAnalyzer::run(func, &arch);
+		SolanaGlobalPtrStringAnalyzer::run(func, &arch);
 		SolanaStringFromPtrLenAnalyzer::run(func, &arch);
 #ifndef DEBUG_EXCEPTIONS
 	} catch (const LowlevelError &error) {

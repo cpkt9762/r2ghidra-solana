@@ -14,6 +14,7 @@ R2GHIDRA_SRCS+=ArchMap.cpp
 R2GHIDRA_SRCS+=R2PrintC.cpp
 R2GHIDRA_SRCS+=RCoreMutex.cpp
 R2GHIDRA_SRCS+=SolanaCallResolver.cpp
+R2GHIDRA_SRCS+=SolanaGlobalPtrStringAnalyzer.cpp
 R2GHIDRA_SRCS+=SolanaInputOffsetAnalyzer.cpp
 R2GHIDRA_SRCS+=SolanaStringFromPtrLenAnalyzer.cpp
 

@@ -19,6 +19,7 @@ r2ghidra_sources = [
   'src/R2PrintC.cpp',
   'src/RCoreMutex.cpp',
   'src/SolanaCallResolver.cpp',
+  'src/SolanaGlobalPtrStringAnalyzer.cpp',
   'src/SolanaInputOffsetAnalyzer.cpp',
   'src/SolanaStringFromPtrLenAnalyzer.cpp',
   'src/SleighAnalValue.cpp',
