@@ -681,6 +681,345 @@ FunctionSymbol *R2Scope::registerFunction(RAnalFunction *fcn) const {
 	return funcsym;
 }
 
+struct ExternArgSpec {
+	const char *name;
+	const char *type;
+};
+
+struct ExternFunctionSpec {
+	const char *name;
+	const char *ret_type;
+	bool no_return;
+	const ExternArgSpec *args;
+	size_t argc;
+};
+
+static void ensure_sbpf_extern_types_loaded(R2Architecture *arch) {
+	static bool loaded = false;
+	if (loaded) {
+		return;
+	}
+	loaded = true;
+
+	// Minimal Solana ABI structs used by syscall prototypes.
+	static const char *declarations[] = {
+		"typedef struct { const unsigned char *addr; unsigned long len; } SolBytes;",
+		"typedef struct { unsigned char x[32]; } SolPubkey;",
+		"typedef struct { const unsigned char *addr; unsigned long len; } SolSignerSeed;",
+		"typedef struct { const SolSignerSeed *addr; unsigned long len; } SolSignerSeeds;",
+		"typedef struct { SolPubkey *pubkey; unsigned char is_writable; unsigned char is_signer; } SolAccountMeta;",
+		"typedef struct { SolPubkey *key; unsigned long *lamports; unsigned long data_len; unsigned char *data; SolPubkey *owner; unsigned long rent_epoch; unsigned char is_signer; unsigned char is_writable; unsigned char executable; } SolAccountInfo;",
+		"typedef struct { SolPubkey *program_id; SolAccountMeta *accounts; unsigned long account_len; unsigned char *data; unsigned long data_len; } SolInstruction;",
+		"typedef struct { unsigned long accounts_len; unsigned long data_len; } SolProcessedSiblingInstruction;"
+	};
+
+	RCoreLock core_lock (arch->getCore ());
+	for (const char *decl : declarations) {
+		char *error_cstr = nullptr;
+		char *out = r_anal_cparse (core_lock->anal, decl, &error_cstr);
+		if (out) {
+			r_anal_save_parsed_type (core_lock->anal, out);
+			free (out);
+		}
+		if (error_cstr) {
+			free (error_cstr);
+		}
+	}
+}
+
+static const ExternFunctionSpec *lookup_sbpf_extern_spec(const char *name) {
+	static const ExternArgSpec kArgsSolPanic[] = {
+		{ "file", "const char *" },
+		{ "file_len", "uint64_t" },
+		{ "line", "uint64_t" },
+		{ "column", "uint64_t" }
+	};
+	static const ExternArgSpec kArgsSolLog[] = {
+		{ "message", "const char *" },
+		{ "message_len", "uint64_t" }
+	};
+	static const ExternArgSpec kArgsSolLog64[] = {
+		{ "arg1", "uint64_t" },
+		{ "arg2", "uint64_t" },
+		{ "arg3", "uint64_t" },
+		{ "arg4", "uint64_t" },
+		{ "arg5", "uint64_t" }
+	};
+	static const ExternArgSpec kArgsSolLogPubkey[] = {
+		{ "pubkey", "const SolPubkey *" }
+	};
+	static const ExternArgSpec kArgsSolLogData[] = {
+		{ "fields", "SolBytes *" },
+		{ "fields_len", "uint64_t" }
+	};
+	static const ExternArgSpec kArgsSolCreateProgramAddress[] = {
+		{ "seeds", "const SolSignerSeed *" },
+		{ "num_seeds", "int" },
+		{ "program_id", "const SolPubkey *" },
+		{ "program_address", "SolPubkey *" }
+	};
+	static const ExternArgSpec kArgsSolTryFindProgramAddress[] = {
+		{ "seeds", "const SolSignerSeed *" },
+		{ "num_seeds", "int" },
+		{ "program_id", "const SolPubkey *" },
+		{ "program_address", "SolPubkey *" },
+		{ "bump_seed", "uint8_t *" }
+	};
+	static const ExternArgSpec kArgsSolHash[] = {
+		{ "bytes", "const SolBytes *" },
+		{ "bytes_len", "int" },
+		{ "result", "uint8_t *" }
+	};
+	static const ExternArgSpec kArgsSolBlake3[] = {
+		{ "bytes", "const SolBytes *" },
+		{ "bytes_len", "int" },
+		{ "result", "const uint8_t *" }
+	};
+	static const ExternArgSpec kArgsSolPoseidon[] = {
+		{ "parameters", "uint64_t" },
+		{ "endianness", "uint64_t" },
+		{ "bytes", "const SolBytes *" },
+		{ "bytes_len", "uint64_t" },
+		{ "result", "uint8_t *" }
+	};
+	static const ExternArgSpec kArgsSolSecp256k1Recover[] = {
+		{ "hash", "const uint8_t *" },
+		{ "recovery_id", "uint64_t" },
+		{ "signature", "const uint8_t *" },
+		{ "result", "uint8_t *" }
+	};
+	static const ExternArgSpec kArgsSolCurveValidatePoint[] = {
+		{ "curve_id", "uint64_t" },
+		{ "point", "const uint8_t *" }
+	};
+	static const ExternArgSpec kArgsSolCurveGroupOp[] = {
+		{ "curve_id", "uint64_t" },
+		{ "group_op", "uint64_t" },
+		{ "left_input", "const uint8_t *" },
+		{ "right_input", "const uint8_t *" },
+		{ "result", "uint8_t *" }
+	};
+	static const ExternArgSpec kArgsSolCurveMultiscalarMul[] = {
+		{ "curve_id", "uint64_t" },
+		{ "scalars", "const uint8_t *" },
+		{ "points", "const uint8_t *" },
+		{ "points_len", "uint64_t" },
+		{ "result", "uint8_t *" }
+	};
+	static const ExternArgSpec kArgsSolCurvePairingMap[] = {
+		{ "curve_id", "uint64_t" },
+		{ "num_pairs", "uint64_t" },
+		{ "g1_points", "const uint8_t *" },
+		{ "g2_points", "const uint8_t *" },
+		{ "result", "uint8_t *" }
+	};
+	static const ExternArgSpec kArgsSolCurveDecompress[] = {
+		{ "curve_id", "uint64_t" },
+		{ "point", "const uint8_t *" },
+		{ "result", "uint8_t *" }
+	};
+	static const ExternArgSpec kArgsSolAltBn128[] = {
+		{ "op", "uint64_t" },
+		{ "input", "const uint8_t *" },
+		{ "input_size", "uint64_t" },
+		{ "result", "uint8_t *" }
+	};
+	static const ExternArgSpec kArgsSolBigModExp[] = {
+		{ "params", "const uint8_t *" },
+		{ "result", "uint8_t *" }
+	};
+	static const ExternArgSpec kArgsSolSysvarOut[] = {
+		{ "out", "uint8_t *" }
+	};
+	static const ExternArgSpec kArgsSolGetSysvar[] = {
+		{ "sysvar_id", "const SolPubkey *" },
+		{ "out", "uint8_t *" },
+		{ "offset", "uint64_t" },
+		{ "length", "uint64_t" }
+	};
+	static const ExternArgSpec kArgsSolGetEpochStake[] = {
+		{ "vote_pubkey", "const SolPubkey *" }
+	};
+	static const ExternArgSpec kArgsSolMemcpy[] = {
+		{ "dst", "uint8_t *" },
+		{ "src", "const uint8_t *" },
+		{ "len", "int" }
+	};
+	static const ExternArgSpec kArgsSolMemmove[] = {
+		{ "dst", "uint8_t *" },
+		{ "src", "const uint8_t *" },
+		{ "len", "int" }
+	};
+	static const ExternArgSpec kArgsSolMemcmp[] = {
+		{ "left", "uint8_t *" },
+		{ "right", "uint8_t *" },
+		{ "len", "int" }
+	};
+	static const ExternArgSpec kArgsSolMemset[] = {
+		{ "dst", "uint8_t *" },
+		{ "value", "uint8_t" },
+		{ "len", "int" }
+	};
+	static const ExternArgSpec kArgsSolAllocFree[] = {
+		{ "size", "uint64_t" },
+		{ "free_addr", "uint64_t" }
+	};
+	static const ExternArgSpec kArgsSolInvokeSignedC[] = {
+		{ "instruction", "const SolInstruction *" },
+		{ "accounts", "const SolAccountInfo *" },
+		{ "num_accounts", "int" },
+		{ "signers", "const SolSignerSeeds *" },
+		{ "num_signers", "int" }
+	};
+	static const ExternArgSpec kArgsSolInvokeSignedRust[] = {
+		{ "instruction", "const SolInstruction *" },
+		{ "accounts", "const SolAccountInfo *" },
+		{ "num_accounts", "uint64_t" },
+		{ "signers", "const SolSignerSeeds *" },
+		{ "num_signers", "uint64_t" }
+	};
+	static const ExternArgSpec kArgsSolSetReturnData[] = {
+		{ "data", "const uint8_t *" },
+		{ "data_len", "uint64_t" }
+	};
+	static const ExternArgSpec kArgsSolGetReturnData[] = {
+		{ "data", "uint8_t *" },
+		{ "max_len", "uint64_t" },
+		{ "program_id", "SolPubkey *" }
+	};
+	static const ExternArgSpec kArgsSolGetProcessedSiblingInstruction[] = {
+		{ "index", "uint64_t" },
+		{ "meta", "SolProcessedSiblingInstruction *" },
+		{ "program_id", "SolPubkey *" },
+		{ "data", "uint8_t *" },
+		{ "accounts", "SolAccountMeta *" }
+	};
+
+	static const ExternFunctionSpec kSpecs[] = {
+		{ "abort", "void", true, nullptr, 0 },
+		{ "sol_panic_", "void", true, kArgsSolPanic, sizeof(kArgsSolPanic) / sizeof(kArgsSolPanic[0]) },
+		{ "sol_log_", "void", false, kArgsSolLog, sizeof(kArgsSolLog) / sizeof(kArgsSolLog[0]) },
+		{ "sol_log_64_", "void", false, kArgsSolLog64, sizeof(kArgsSolLog64) / sizeof(kArgsSolLog64[0]) },
+		{ "sol_log_compute_units_", "void", false, nullptr, 0 },
+		{ "sol_log_pubkey", "void", false, kArgsSolLogPubkey, sizeof(kArgsSolLogPubkey) / sizeof(kArgsSolLogPubkey[0]) },
+		{ "sol_log_data", "void", false, kArgsSolLogData, sizeof(kArgsSolLogData) / sizeof(kArgsSolLogData[0]) },
+		{ "sol_create_program_address", "uint64_t", false, kArgsSolCreateProgramAddress, sizeof(kArgsSolCreateProgramAddress) / sizeof(kArgsSolCreateProgramAddress[0]) },
+		{ "sol_try_find_program_address", "uint64_t", false, kArgsSolTryFindProgramAddress, sizeof(kArgsSolTryFindProgramAddress) / sizeof(kArgsSolTryFindProgramAddress[0]) },
+		{ "sol_sha256", "uint64_t", false, kArgsSolHash, sizeof(kArgsSolHash) / sizeof(kArgsSolHash[0]) },
+		{ "sol_keccak256", "uint64_t", false, kArgsSolHash, sizeof(kArgsSolHash) / sizeof(kArgsSolHash[0]) },
+		{ "sol_blake3", "uint64_t", false, kArgsSolBlake3, sizeof(kArgsSolBlake3) / sizeof(kArgsSolBlake3[0]) },
+		{ "sol_poseidon", "uint64_t", false, kArgsSolPoseidon, sizeof(kArgsSolPoseidon) / sizeof(kArgsSolPoseidon[0]) },
+		{ "sol_secp256k1_recover", "uint64_t", false, kArgsSolSecp256k1Recover, sizeof(kArgsSolSecp256k1Recover) / sizeof(kArgsSolSecp256k1Recover[0]) },
+		{ "sol_curve_validate_point", "uint64_t", false, kArgsSolCurveValidatePoint, sizeof(kArgsSolCurveValidatePoint) / sizeof(kArgsSolCurveValidatePoint[0]) },
+		{ "sol_curve_group_op", "uint64_t", false, kArgsSolCurveGroupOp, sizeof(kArgsSolCurveGroupOp) / sizeof(kArgsSolCurveGroupOp[0]) },
+		{ "sol_curve_multiscalar_mul", "uint64_t", false, kArgsSolCurveMultiscalarMul, sizeof(kArgsSolCurveMultiscalarMul) / sizeof(kArgsSolCurveMultiscalarMul[0]) },
+		{ "sol_curve_pairing_map", "uint64_t", false, kArgsSolCurvePairingMap, sizeof(kArgsSolCurvePairingMap) / sizeof(kArgsSolCurvePairingMap[0]) },
+		{ "sol_curve_decompress", "uint64_t", false, kArgsSolCurveDecompress, sizeof(kArgsSolCurveDecompress) / sizeof(kArgsSolCurveDecompress[0]) },
+		{ "sol_alt_bn128_group_op", "uint64_t", false, kArgsSolAltBn128, sizeof(kArgsSolAltBn128) / sizeof(kArgsSolAltBn128[0]) },
+		{ "sol_alt_bn128_compression", "uint64_t", false, kArgsSolAltBn128, sizeof(kArgsSolAltBn128) / sizeof(kArgsSolAltBn128[0]) },
+		{ "sol_big_mod_exp", "uint64_t", false, kArgsSolBigModExp, sizeof(kArgsSolBigModExp) / sizeof(kArgsSolBigModExp[0]) },
+		{ "sol_get_clock_sysvar", "uint64_t", false, kArgsSolSysvarOut, sizeof(kArgsSolSysvarOut) / sizeof(kArgsSolSysvarOut[0]) },
+		{ "sol_get_epoch_schedule_sysvar", "uint64_t", false, kArgsSolSysvarOut, sizeof(kArgsSolSysvarOut) / sizeof(kArgsSolSysvarOut[0]) },
+		{ "sol_get_rent_sysvar", "uint64_t", false, kArgsSolSysvarOut, sizeof(kArgsSolSysvarOut) / sizeof(kArgsSolSysvarOut[0]) },
+		{ "sol_get_fees_sysvar", "uint64_t", false, kArgsSolSysvarOut, sizeof(kArgsSolSysvarOut) / sizeof(kArgsSolSysvarOut[0]) },
+		{ "sol_get_epoch_rewards_sysvar", "uint64_t", false, kArgsSolSysvarOut, sizeof(kArgsSolSysvarOut) / sizeof(kArgsSolSysvarOut[0]) },
+		{ "sol_get_last_restart_slot", "uint64_t", false, kArgsSolSysvarOut, sizeof(kArgsSolSysvarOut) / sizeof(kArgsSolSysvarOut[0]) },
+		{ "sol_get_sysvar", "uint64_t", false, kArgsSolGetSysvar, sizeof(kArgsSolGetSysvar) / sizeof(kArgsSolGetSysvar[0]) },
+		{ "sol_get_epoch_stake", "uint64_t", false, kArgsSolGetEpochStake, sizeof(kArgsSolGetEpochStake) / sizeof(kArgsSolGetEpochStake[0]) },
+		{ "sol_memcpy_", "void", false, kArgsSolMemcpy, sizeof(kArgsSolMemcpy) / sizeof(kArgsSolMemcpy[0]) },
+		{ "sol_memmove_", "void", false, kArgsSolMemmove, sizeof(kArgsSolMemmove) / sizeof(kArgsSolMemmove[0]) },
+		{ "sol_memcmp_", "int", false, kArgsSolMemcmp, sizeof(kArgsSolMemcmp) / sizeof(kArgsSolMemcmp[0]) },
+		{ "sol_memset_", "void", false, kArgsSolMemset, sizeof(kArgsSolMemset) / sizeof(kArgsSolMemset[0]) },
+		{ "sol_alloc_free_", "uint64_t", false, kArgsSolAllocFree, sizeof(kArgsSolAllocFree) / sizeof(kArgsSolAllocFree[0]) },
+		{ "sol_invoke_signed_c", "uint64_t", false, kArgsSolInvokeSignedC, sizeof(kArgsSolInvokeSignedC) / sizeof(kArgsSolInvokeSignedC[0]) },
+		{ "sol_invoke_signed_rust", "uint64_t", false, kArgsSolInvokeSignedRust, sizeof(kArgsSolInvokeSignedRust) / sizeof(kArgsSolInvokeSignedRust[0]) },
+		{ "sol_set_return_data", "void", false, kArgsSolSetReturnData, sizeof(kArgsSolSetReturnData) / sizeof(kArgsSolSetReturnData[0]) },
+		{ "sol_get_return_data", "uint64_t", false, kArgsSolGetReturnData, sizeof(kArgsSolGetReturnData) / sizeof(kArgsSolGetReturnData[0]) },
+		{ "sol_get_processed_sibling_instruction", "uint64_t", false, kArgsSolGetProcessedSiblingInstruction, sizeof(kArgsSolGetProcessedSiblingInstruction) / sizeof(kArgsSolGetProcessedSiblingInstruction[0]) },
+		{ "sol_get_stack_height", "uint64_t", false, nullptr, 0 },
+		{ "sol_remaining_compute_units", "uint64_t", false, nullptr, 0 }
+	};
+
+	for (const auto &spec : kSpecs) {
+		if (!strcmp (spec.name, name)) {
+			return &spec;
+		}
+	}
+	return nullptr;
+}
+
+static Datatype *resolve_extern_type(
+	R2Architecture *arch,
+	const char *func_name,
+	const char *field_name,
+	const char *type_name,
+	int default_size,
+	bool default_to_uint64)
+{
+	if (!R_STR_ISNOTEMPTY (type_name)) {
+		return default_to_uint64 ? arch->types->getBase (8, TYPE_UINT)
+			: arch->types->getBase (default_size, TYPE_UNKNOWN);
+	}
+
+	std::string type_error;
+	Datatype *type = arch->getTypeFactory ()->fromCString (type_name, &type_error);
+	if (!type && std::string (type_name).find ('*') != std::string::npos) {
+		const bool is_const = std::string (type_name).find ("const ") != std::string::npos;
+		type = arch->getTypeFactory ()->fromCString (is_const ? "const void *" : "void *", nullptr);
+	}
+	if (!type) {
+		const char *what = field_name ? "argument" : "return";
+		arch->addWarning ("Failed to match " + std::string (what) + " type "
+			+ to_string (type_name) + " for extern function " + to_string (func_name)
+			+ (type_error.empty () ? "" : (": " + type_error)));
+		type = default_to_uint64
+			? arch->types->getBase (8, TYPE_UINT)
+			: arch->types->getBase (default_size, TYPE_UNKNOWN);
+	}
+	return type;
+}
+
+static bool apply_sbpf_extern_signature(R2Architecture *arch, FunctionSymbol *funcsym, const char *name) {
+	if (!funcsym || !arch->defaultfp || !R_STR_ISNOTEMPTY (name)) {
+		return false;
+	}
+	const ExternFunctionSpec *spec = lookup_sbpf_extern_spec (name);
+	if (!spec) {
+		return false;
+	}
+
+	ensure_sbpf_extern_types_loaded (arch);
+
+	Funcdata *fd = funcsym->getFunction ();
+	if (!fd) {
+		return false;
+	}
+
+	PrototypePieces proto;
+	proto.model = arch->defaultfp;
+	proto.name = name;
+	proto.firstVarArgSlot = -1;
+	const int default_size = arch->translate->getDefaultSize ();
+	proto.outtype = resolve_extern_type (arch, name, nullptr, spec->ret_type, default_size, true);
+
+	for (size_t i = 0; i < spec->argc; i++) {
+		const auto &arg = spec->args[i];
+		Datatype *arg_type = resolve_extern_type (
+			arch, name, arg.name, arg.type, default_size, false);
+		if (!arg_type) {
+			continue;
+		}
+		proto.intypes.push_back (arg_type);
+		proto.innames.push_back (arg.name ? arg.name : "");
+	}
+
+	fd->getFuncProto ().setPieces (proto);
+	if (spec->no_return) {
+		fd->getFuncProto ().setNoReturn (true);
+	}
+	return true;
+}
+
 FunctionSymbol *R2Scope::registerExternFunction(const char *name, const Address &addr) const {
 	Document doc;
 	doc.setName ("mapsym");
@@ -732,7 +1071,9 @@ FunctionSymbol *R2Scope::registerExternFunction(const char *name, const Address 
 	try {
 		XmlDecode dec(arch, &doc);
 		auto sym = cache->addMapSym (dec);
-		return dynamic_cast<FunctionSymbol *>(sym);
+		auto funcsym = dynamic_cast<FunctionSymbol *>(sym);
+		apply_sbpf_extern_signature (arch, funcsym, name);
+		return funcsym;
 	} catch (const DecoderError &e) {
 		return nullptr;
 	}
