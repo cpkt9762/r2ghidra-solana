@@ -7,6 +7,7 @@
 #include "SleighAsm.h"
 #include "ArchMap.h"
 #include "PcodeFixupPreprocessor.h"
+#include "SolanaAnchorDispatcherAnalyzer.h"
 #include "SolanaGlobalPtrStringAnalyzer.h"
 #include "SolanaInputOffsetAnalyzer.h"
 #include "SolanaStringFromPtrLenAnalyzer.h"
@@ -77,6 +78,7 @@ CV cfg_var_casts      ("casts",       "false",    "Show type casts where needed"
 CV cfg_var_fixups     ("fixups",      "false",    "Apply pcode fixups");
 CV cfg_var_roprop     ("roprop",      "0",        "Propagate read-only constants (0,1,2,3,4)");
 CV cfg_var_timeout    ("timeout",     "0",        "Run decompilation in a separate process and kill it after a specific time");
+CV cfg_var_solana_idl ("solana.idl",  "",         "Path to Anchor IDL JSON used for dispatcher naming");
 
 
 static std::recursive_mutex decompiler_mutex;
@@ -198,6 +200,7 @@ static void Decompile(RCore *core, ut64 addr, DecompileMode mode, std::stringstr
 		SolanaInputOffsetAnalyzer::run(func, &arch);
 		SolanaGlobalPtrStringAnalyzer::run(func, &arch);
 		SolanaStringFromPtrLenAnalyzer::run(func, &arch);
+		SolanaAnchorDispatcherAnalyzer::run(func, &arch, cfg_var_solana_idl.GetString(core->config));
 #ifndef DEBUG_EXCEPTIONS
 	} catch (const LowlevelError &error) {
 		arch.getCore()->sleepEndForce ();

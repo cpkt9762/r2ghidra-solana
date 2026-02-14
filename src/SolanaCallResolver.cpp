@@ -329,7 +329,31 @@ bool resolve_sbpf_internal_call_target(
 		return false;
 	}
 	const Varnode *target = op->getIn (0);
-	if (!target || !target->isConstant ()) {
+	if (!target) {
+		return false;
+	}
+	if (target->getSpace () && target->getSpace ()->getType () == IPTR_FSPEC) {
+		FuncCallSpecs *fc = FuncCallSpecs::getFspecFromConst (target->getAddr ());
+		if (!fc) {
+			return false;
+		}
+		const Address entry = fc->getEntryAddress ();
+		if (entry.getSpace () && entry.getSpace ()->getName () == "syscall") {
+			return resolve_sbpf_internal_call_target_with_hint (
+				arch,
+				op->getAddr (),
+				entry.getOffset (),
+				out_target);
+		}
+		RCoreLock core (arch->getCore ());
+		if (!entry.isInvalid () && is_executable_target (core, entry.getOffset ())) {
+			*out_target = entry.getOffset ();
+			materialize_function_at_target (core, *out_target);
+			return true;
+		}
+		return false;
+	}
+	if (!target->isConstant ()) {
 		return false;
 	}
 	return resolve_sbpf_internal_call_target_with_hint (
