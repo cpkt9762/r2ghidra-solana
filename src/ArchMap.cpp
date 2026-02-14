@@ -181,7 +181,24 @@ static const std::map<std::string, ArchMapper> arch_map = {
 	}},
 	{ "bpf", { S("BPF"), S("default"), B(32), E(false) } },
 	{ "ebpf", { S("eBPF"), S("default"), B(32), E(false) } },
-	{ "sbpf", { S("sBPF"), S("default"), B(64), E(false) } },
+	{ "sbpf", {
+		S("sBPF"),
+		CUSTOM_FLAVOR((RCore *core) {
+			const char *cpu = core ? r_config_get (core->config, "asm.cpu") : nullptr;
+			if (!cpu) {
+				return std::string ("default");
+			}
+			const std::string low_cpu = tolower (cpu);
+			if (low_cpu.find ("v3") != std::string::npos) {
+				return std::string ("v3");
+			}
+			if (low_cpu.find ("v0") != std::string::npos) {
+				return std::string ("v0");
+			}
+			return std::string ("default");
+		}),
+		B(64), E(false)
+	} },
 	{ "sbpfv0", { S("sBPF"), S("v0"), B(64), E(false) } },
 	{ "sbpfv3", { S("sBPF"), S("v3"), B(64), E(false) } }
 };
