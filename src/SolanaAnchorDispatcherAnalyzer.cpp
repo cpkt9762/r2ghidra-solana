@@ -817,6 +817,25 @@ static std::string unique_ix_name(RCore *core, ut64 target, const std::string &l
 	return base;
 }
 
+static std::string unique_dispatch_name(RCore *core, ut64 target) {
+	const std::string base = "ix.dispatch";
+	if (!core || !core->flags) {
+		return base;
+	}
+	RFlagItem *existing = r_flag_get(core->flags, base.c_str());
+	if (!existing || existing->addr == target) {
+		return base;
+	}
+	for (int i = 1; i < 10000; ++i) {
+		std::string candidate = base + "_" + std::to_string(i);
+		existing = r_flag_get(core->flags, candidate.c_str());
+		if (!existing || existing->addr == target) {
+			return candidate;
+		}
+	}
+	return base;
+}
+
 static void rename_target_if_needed(RCore *core, ut64 target, const std::string &leaf) {
 	if (!core || !core->anal || leaf.empty()) {
 		return;
@@ -827,6 +846,51 @@ static void rename_target_if_needed(RCore *core, ut64 target, const std::string 
 	}
 	const std::string desired = unique_ix_name(core, target, leaf);
 	r_anal_function_rename(fcn, desired.c_str());
+}
+
+static void rename_dispatcher_if_needed(RCore *core, ut64 target) {
+	if (!core || !core->anal) {
+		return;
+	}
+	RAnalFunction *fcn = r_anal_get_fcn_in(core->anal, target, R_ANAL_FCN_TYPE_NULL);
+	if (!fcn || !is_generic_function_name(fcn->name)) {
+		return;
+	}
+	const std::string desired = unique_dispatch_name(core, target);
+	r_anal_function_rename(fcn, desired.c_str());
+}
+
+static std::string basename_of(const std::string &path) {
+	if (path.empty()) {
+		return std::string();
+	}
+	size_t pos = path.find_last_of("/\\");
+	return pos == std::string::npos ? path : path.substr(pos + 1);
+}
+
+static void apply_dispatcher_comment(
+	RCore *core,
+	ut64 target,
+	size_t resolved_targets,
+	size_t total_targets,
+	size_t unique_discriminators,
+	const std::string &idl_path)
+{
+	if (!core || !core->anal) {
+		return;
+	}
+	std::ostringstream comment;
+	comment << "solana.anchor.dispatch targets=" << resolved_targets << "/" << total_targets
+		<< " unique_disc=" << unique_discriminators;
+	const std::string idl_base = basename_of(idl_path);
+	if (!idl_base.empty()) {
+		comment << " idl=" << idl_base;
+	}
+	const char *existing = r_meta_get_string(core->anal, R_META_TYPE_COMMENT, target);
+	if (existing && *existing && !r_str_startswith(existing, "solana.anchor.dispatch ")) {
+		return;
+	}
+	r_meta_set_string(core->anal, R_META_TYPE_COMMENT, target, comment.str().c_str());
 }
 
 static void apply_ix_signature_and_comment(
@@ -1016,6 +1080,18 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 	}
 
 	RCoreLock core(arch->getCore());
+	ut64 dispatcher_addr = func->getAddress().getOffset();
+	if (core) {
+		dispatcher_addr = core->addr;
+	}
+	rename_dispatcher_if_needed(core, dispatcher_addr);
+	apply_dispatcher_comment(
+		core,
+		dispatcher_addr,
+		target_to_disc.size(),
+		calls_by_target.size(),
+		unique_discs.size(),
+		idl_path);
 	for (const auto &it : target_to_disc) {
 		const ut64 target = it.first;
 		const ut64 disc = it.second;
