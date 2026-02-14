@@ -25,12 +25,17 @@ public:
 		uintb ptr_value = 0;
 		int4 replace_slot = 1;
 	};
+	struct SolanaInputOffsetHint {
+		std::string symbol;
+		uintb value = 0;
+	};
 
 private:
 	R2TypeFactory *r2TypeFactory_ = nullptr;
 	std::map<std::string, VarnodeData> registers;
 	std::vector<std::string> warnings;
 	std::map<uint64_t, SolanaStringFromPtrLenHint> solanaStringFromPtrLenHints;
+	std::map<uint4, SolanaInputOffsetHint> solanaInputOffsetHints;
 
 	bool rawptr = false;
 
@@ -48,6 +53,9 @@ public:
 	void clearSolanaStringFromPtrLenHints();
 	void setSolanaStringFromPtrLenHint(const Address &call_addr, const SolanaStringFromPtrLenHint &hint);
 	const SolanaStringFromPtrLenHint *findSolanaStringFromPtrLenHint(const Address &call_addr) const;
+	void clearSolanaInputOffsetHints();
+	void setSolanaInputOffsetHint(uint4 create_index, const SolanaInputOffsetHint &hint);
+	const SolanaInputOffsetHint *findSolanaInputOffsetHint(uint4 create_index) const;
 
 	void addWarning(const std::string &warning)	{ warnings.push_back(warning); }
 	const std::vector<std::string> getWarnings() const { return warnings; }

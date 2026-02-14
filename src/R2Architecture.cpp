@@ -117,6 +117,24 @@ const R2Architecture::SolanaStringFromPtrLenHint *R2Architecture::findSolanaStri
 	return it == solanaStringFromPtrLenHints.end() ? nullptr : &it->second;
 }
 
+void R2Architecture::clearSolanaInputOffsetHints() {
+	solanaInputOffsetHints.clear();
+}
+
+void R2Architecture::setSolanaInputOffsetHint(
+	uint4 create_index,
+	const SolanaInputOffsetHint &hint)
+{
+	solanaInputOffsetHints[create_index] = hint;
+}
+
+const R2Architecture::SolanaInputOffsetHint *R2Architecture::findSolanaInputOffsetHint(
+	uint4 create_index) const
+{
+	auto it = solanaInputOffsetHints.find(create_index);
+	return it == solanaInputOffsetHints.end() ? nullptr : &it->second;
+}
+
 Translate *R2Architecture::buildTranslator(DocumentStorage &store) {
 	Translate *ret = SleighArchitecture::buildTranslator (store);
 	loadRegisters(ret);

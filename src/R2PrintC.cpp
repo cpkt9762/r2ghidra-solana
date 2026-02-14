@@ -83,6 +83,18 @@ void R2PrintC::pushUnnamedLocation(const Address &addr, const Varnode *vn, const
 	}
 }
 
+void R2PrintC::pushConstant(uintb val, const Datatype *ct, tagtype tag, const Varnode *vn, const PcodeOp *op) {
+	auto *arch = dynamic_cast<R2Architecture *>(glb);
+	if (arch && vn && vn->isConstant()) {
+		const auto *hint = arch->findSolanaInputOffsetHint(vn->getCreateIndex());
+		if (hint && hint->value == val && !hint->symbol.empty()) {
+			pushAtom(Atom(hint->symbol, tag, EmitMarkup::const_color, op, vn, val));
+			return;
+		}
+	}
+	PrintC::pushConstant(val, ct, tag, vn, op);
+}
+
 string R2PrintC::resolveCurrentCallName(const PcodeOp *op) const {
 	auto *arch = dynamic_cast<R2Architecture *>(glb);
 	if (!arch) {

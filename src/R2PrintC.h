@@ -10,6 +10,7 @@ using namespace ghidra;
 class R2PrintC : public PrintC {
 protected:
 	void pushUnnamedLocation(const Address &addr, const Varnode *vn,const PcodeOp *op) override;
+	void pushConstant(uintb val, const Datatype *ct, tagtype tag, const Varnode *vn, const PcodeOp *op) override;
 	void opCall(const PcodeOp *op) override;
 	string genericFunctionName(const Address &addr) override;
 	string resolveCurrentCallName(const PcodeOp *op) const;
