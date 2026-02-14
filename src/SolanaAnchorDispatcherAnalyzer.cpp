@@ -918,6 +918,8 @@ static void apply_dispatcher_comment(
 	size_t total_targets,
 	size_t unique_discriminators,
 	size_t named_discriminators,
+	size_t resolved_callsites,
+	size_t total_callsites,
 	const std::string &idl_path)
 {
 	if (!core || !core->anal) {
@@ -926,7 +928,8 @@ static void apply_dispatcher_comment(
 	std::ostringstream comment;
 	comment << "solana.anchor.dispatch targets=" << resolved_targets << "/" << total_targets
 		<< " unique_disc=" << unique_discriminators
-		<< " named_disc=" << named_discriminators;
+		<< " named_disc=" << named_discriminators
+		<< " callsites=" << resolved_callsites << "/" << total_callsites;
 	const std::string idl_base = basename_of(idl_path);
 	if (!idl_base.empty()) {
 		comment << " idl=" << idl_base;
@@ -1283,6 +1286,8 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 		calls_by_target.size(),
 		unique_discs.size(),
 		named_disc_count,
+		callsite_to_disc.size(),
+		candidates.size(),
 		idl_path);
 	std::unordered_set<ut64> annotated_callsites;
 	for (const auto &it : target_to_disc) {
