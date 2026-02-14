@@ -986,6 +986,8 @@ static void apply_ix_signature_and_comment(
 		comment << " arity=" << effective_arity;
 	}
 	if (meta) {
+		comment << " idl_args_count=" << meta->args.size()
+			<< " idl_accts_count=" << meta->accounts.size();
 		if (!meta->idl_name.empty() && meta->idl_name != leaf_name) {
 			comment << " idl=" << meta->idl_name;
 		}
