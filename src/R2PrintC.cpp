@@ -155,6 +155,9 @@ static const char *extract_sbpf_import_name(const char *flag_name) {
 	if (r_str_startswith (flag_name, "imp.")) {
 		return flag_name + 4;
 	}
+	if (r_str_startswith (flag_name, "sol_") || !strcmp (flag_name, "abort")) {
+		return flag_name;
+	}
 	return nullptr;
 }
 
@@ -177,6 +180,34 @@ static std::string resolve_sbpf_call_name_from_flags(R2Architecture *arch, const
 			continue;
 		}
 		const char *name = extract_sbpf_import_name (flag->name);
+		if (is_sbpf_syscall_name (name)) {
+			return std::string (name);
+		}
+	}
+	return {};
+}
+
+static std::string resolve_sbpf_call_name_from_reloc(R2Architecture *arch, const Address &call_addr) {
+	RCoreLock core (arch->getCore ());
+	RRBTree *relocs = r_bin_get_relocs (core->bin);
+	if (!relocs) {
+		return {};
+	}
+	RRBNode *node;
+	RBinReloc *reloc;
+	r_crbtree_foreach (relocs, node, RBinReloc, reloc) {
+		if (!reloc) {
+			continue;
+		}
+		if (reloc->vaddr != call_addr.getOffset () && reloc->paddr != call_addr.getOffset ()) {
+			continue;
+		}
+		const char *name = nullptr;
+		if (reloc->import && reloc->import->name) {
+			name = r_bin_name_tostring (reloc->import->name);
+		} else if (reloc->symbol && reloc->symbol->name) {
+			name = r_bin_name_tostring (reloc->symbol->name);
+		}
 		if (is_sbpf_syscall_name (name)) {
 			return std::string (name);
 		}
@@ -232,6 +263,10 @@ string R2PrintC::genericFunctionName(const Address &addr) {
 			std::string from_flags = resolve_sbpf_call_name_from_flags (arch, call_addr);
 			if (!from_flags.empty ()) {
 				return from_flags;
+			}
+			std::string from_reloc = resolve_sbpf_call_name_from_reloc (arch, call_addr);
+			if (!from_reloc.empty ()) {
+				return from_reloc;
 			}
 			std::string internal = resolve_sbpf_internal_call_name (arch, call_addr, addr.getOffset ());
 			if (!internal.empty ()) {
