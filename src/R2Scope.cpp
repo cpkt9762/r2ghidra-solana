@@ -871,6 +871,9 @@ static const char *extract_syscall_name(const char *flag_name) {
 	if (r_str_startswith (flag_name, "reloc.")) {
 		return flag_name + 6;
 	}
+	if (r_str_startswith (flag_name, "loc.imp.")) {
+		return flag_name + 8;
+	}
 	if (r_str_startswith (flag_name, "sym.imp.")) {
 		return flag_name + 8;
 	}
