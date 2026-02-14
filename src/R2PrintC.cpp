@@ -4,6 +4,7 @@
 #include <varnode.hh>
 
 #include "R2PrintC.h"
+#include "R2Architecture.h"
 #include "RCoreMutex.h"
 
 
@@ -141,11 +142,101 @@ static const char *get_sbpf_syscall_name(uint64_t addr) {
 	return nullptr;
 }
 
+static const char *extract_sbpf_import_name(const char *flag_name) {
+	if (r_str_startswith (flag_name, "reloc.")) {
+		return flag_name + 6;
+	}
+	if (r_str_startswith (flag_name, "loc.imp.")) {
+		return flag_name + 8;
+	}
+	if (r_str_startswith (flag_name, "sym.imp.")) {
+		return flag_name + 8;
+	}
+	if (r_str_startswith (flag_name, "imp.")) {
+		return flag_name + 4;
+	}
+	return nullptr;
+}
+
+static bool is_sbpf_syscall_name(const char *name) {
+	return name
+		&& (r_str_startswith (name, "sol_") || !strcmp (name, "abort"));
+}
+
+static std::string resolve_sbpf_call_name_from_flags(R2Architecture *arch, const Address &call_addr) {
+	RCoreLock core (arch->getCore ());
+	const RList *flags = r_flag_get_list (core->flags, call_addr.getOffset ());
+	if (!flags) {
+		return {};
+	}
+	RListIter *iter;
+	void *pos;
+	r_list_foreach (flags, iter, pos) {
+		auto flag = reinterpret_cast<RFlagItem *>(pos);
+		if (!flag || !flag->name) {
+			continue;
+		}
+		const char *name = extract_sbpf_import_name (flag->name);
+		if (is_sbpf_syscall_name (name)) {
+			return std::string (name);
+		}
+	}
+	return {};
+}
+
+static std::string resolve_sbpf_internal_call_name(R2Architecture *arch, const Address &call_addr, uint64_t imm) {
+	const int64_t rel = static_cast<int64_t> (static_cast<int32_t> (imm));
+	const ut64 target = call_addr.getOffset () + 8 + (rel * 8);
+	RCoreLock core (arch->getCore ());
+	RAnalFunction *fcn = r_anal_get_function_at (core->anal, target);
+	if (fcn && fcn->name) {
+		return std::string (fcn->name);
+	}
+	const RList *flags = r_flag_get_list (core->flags, target);
+	if (!flags) {
+		return {};
+	}
+	RListIter *iter;
+	void *pos;
+	r_list_foreach (flags, iter, pos) {
+		auto flag = reinterpret_cast<RFlagItem *>(pos);
+		if (!flag || !flag->name) {
+			continue;
+		}
+		return std::string (flag->name);
+	}
+	return {};
+}
+
+void R2PrintC::opCall(const PcodeOp *op) {
+	const PcodeOp *saved = current_call_op;
+	current_call_op = op;
+	try {
+		PrintC::opCall (op);
+	} catch (...) {
+		current_call_op = saved;
+		throw;
+	}
+	current_call_op = saved;
+}
+
 string R2PrintC::genericFunctionName(const Address &addr) {
 	if (addr.getSpace()->getName() == "syscall") {
 		const char *name = get_sbpf_syscall_name(addr.getOffset());
 		if (name) {
 			return string(name);
+		}
+		auto *arch = dynamic_cast<R2Architecture *>(glb);
+		if (arch && current_call_op) {
+			const Address call_addr = current_call_op->getAddr ();
+			std::string from_flags = resolve_sbpf_call_name_from_flags (arch, call_addr);
+			if (!from_flags.empty ()) {
+				return from_flags;
+			}
+			std::string internal = resolve_sbpf_internal_call_name (arch, call_addr, addr.getOffset ());
+			if (!internal.empty ()) {
+				return internal;
+			}
 		}
 	}
 	return PrintC::genericFunctionName(addr);
