@@ -12,6 +12,7 @@ protected:
 	void pushUnnamedLocation(const Address &addr, const Varnode *vn,const PcodeOp *op) override;
 	void opCall(const PcodeOp *op) override;
 	string genericFunctionName(const Address &addr) override;
+	string resolveCurrentCallName(const PcodeOp *op) const;
 	const PcodeOp *current_call_op = nullptr;
 	// void opCast(const PcodeOp *op) override;
 

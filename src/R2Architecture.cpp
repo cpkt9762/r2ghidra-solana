@@ -93,6 +93,30 @@ Address R2Architecture::registerAddressFromR2Reg(const char *regname) {
 	return it->second.getAddr ();
 }
 
+void R2Architecture::clearSolanaStringFromPtrLenHints() {
+	solanaStringFromPtrLenHints.clear();
+}
+
+void R2Architecture::setSolanaStringFromPtrLenHint(
+	const Address &call_addr,
+	const SolanaStringFromPtrLenHint &hint)
+{
+	if (call_addr.isInvalid()) {
+		return;
+	}
+	solanaStringFromPtrLenHints[call_addr.getOffset()] = hint;
+}
+
+const R2Architecture::SolanaStringFromPtrLenHint *R2Architecture::findSolanaStringFromPtrLenHint(
+	const Address &call_addr) const
+{
+	if (call_addr.isInvalid()) {
+		return nullptr;
+	}
+	auto it = solanaStringFromPtrLenHints.find(call_addr.getOffset());
+	return it == solanaStringFromPtrLenHints.end() ? nullptr : &it->second;
+}
+
 Translate *R2Architecture::buildTranslator(DocumentStorage &store) {
 	Translate *ret = SleighArchitecture::buildTranslator (store);
 	loadRegisters(ret);

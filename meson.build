@@ -18,6 +18,8 @@ r2ghidra_sources = [
   'src/ArchMap.cpp',
   'src/R2PrintC.cpp',
   'src/RCoreMutex.cpp',
+  'src/SolanaCallResolver.cpp',
+  'src/SolanaStringFromPtrLenAnalyzer.cpp',
   'src/SleighAnalValue.cpp',
   'src/SleighAsm.cpp',
   'src/SleighInstruction.cpp',

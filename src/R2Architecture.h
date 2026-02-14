@@ -8,6 +8,8 @@
 
 #include "RCoreMutex.h"
 
+#include <cstdint>
+
 using namespace ghidra;
 
 class R2TypeFactory;
@@ -17,9 +19,18 @@ class R2Architecture : public SleighArchitecture {
 private:
 	RCoreMutex coreMutex;
 
+public:
+	struct SolanaStringFromPtrLenHint {
+		std::string quoted;
+		uintb ptr_value = 0;
+		int4 replace_slot = 1;
+	};
+
+private:
 	R2TypeFactory *r2TypeFactory_ = nullptr;
 	std::map<std::string, VarnodeData> registers;
 	std::vector<std::string> warnings;
+	std::map<uint64_t, SolanaStringFromPtrLenHint> solanaStringFromPtrLenHints;
 
 	bool rawptr = false;
 
@@ -34,6 +45,9 @@ public:
 
 	ProtoModel *protoModelFromR2CC(const char *cc);
 	Address registerAddressFromR2Reg(const char *regname);
+	void clearSolanaStringFromPtrLenHints();
+	void setSolanaStringFromPtrLenHint(const Address &call_addr, const SolanaStringFromPtrLenHint &hint);
+	const SolanaStringFromPtrLenHint *findSolanaStringFromPtrLenHint(const Address &call_addr) const;
 
 	void addWarning(const std::string &warning)	{ warnings.push_back(warning); }
 	const std::vector<std::string> getWarnings() const { return warnings; }
