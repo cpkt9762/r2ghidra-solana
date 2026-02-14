@@ -179,12 +179,35 @@ static bool is_executable_target(RCore *core, ut64 addr) {
 	return false;
 }
 
-static std::string name_for_target_or_autocreate(RCore *core, ut64 target) {
+static bool should_force_function_analysis(RAnalFunction *fcn) {
+	if (!fcn) {
+		return true;
+	}
+	return r_anal_function_realsize (fcn) == 0;
+}
+
+static RAnalFunction *materialize_function_at_target(RCore *core, ut64 target) {
+	if (!core || !core->anal || !is_executable_target (core, target)) {
+		return nullptr;
+	}
 	RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, target, R_ANAL_FCN_TYPE_NULL);
-	if (!fcn && is_executable_target (core, target)) {
-		r_anal_create_function (core->anal, nullptr, target, R_ANAL_FCN_TYPE_FCN, nullptr);
+	if (should_force_function_analysis (fcn)) {
+		r_core_anal_fcn (core, target, target, R_ANAL_REF_TYPE_CALL, 1);
 		fcn = r_anal_get_fcn_in (core->anal, target, R_ANAL_FCN_TYPE_NULL);
 	}
+	if (!fcn) {
+		r_anal_create_function (core->anal, nullptr, target, R_ANAL_FCN_TYPE_FCN, nullptr);
+		fcn = r_anal_get_fcn_in (core->anal, target, R_ANAL_FCN_TYPE_NULL);
+		if (should_force_function_analysis (fcn)) {
+			r_core_anal_fcn (core, target, target, R_ANAL_REF_TYPE_CALL, 1);
+			fcn = r_anal_get_fcn_in (core->anal, target, R_ANAL_FCN_TYPE_NULL);
+		}
+	}
+	return fcn;
+}
+
+static std::string name_for_target_or_autocreate(RCore *core, ut64 target) {
+	RAnalFunction *fcn = materialize_function_at_target (core, target);
 	if (fcn && fcn->name) {
 		return std::string (fcn->name);
 	}
@@ -217,7 +240,12 @@ static bool decode_sbpf_call_imm32(RCore *core, ut64 call_addr, uint32_t *imm) {
 	return true;
 }
 
-static std::string resolve_sbpf_internal_call_name(R2Architecture *arch, const Address &call_addr, uint64_t imm_hint) {
+static bool collect_sbpf_internal_call_targets(
+	R2Architecture *arch,
+	const Address &call_addr,
+	uint64_t imm_hint,
+	std::vector<ut64> &targets)
+{
 	RCoreLock core (arch->getCore ());
 	std::vector<int64_t> rels;
 	uint32_t imm32 = 0;
@@ -244,12 +272,71 @@ static std::string resolve_sbpf_internal_call_name(R2Architecture *arch, const A
 			continue;
 		}
 		const ut64 target = static_cast<ut64> (target_signed);
-		std::string name = name_for_target_or_autocreate (core, target);
-		if (!name.empty ()) {
-			return name;
+		if (!is_executable_target (core, target)) {
+			continue;
+		}
+		targets.push_back (target);
+	}
+	return !targets.empty ();
+}
+
+static bool resolve_sbpf_internal_call_target_with_hint(
+	R2Architecture *arch,
+	const Address &call_addr,
+	uint64_t imm_hint,
+	ut64 *out_target)
+{
+	if (!arch || !out_target) {
+		return false;
+	}
+	std::vector<ut64> targets;
+	if (!collect_sbpf_internal_call_targets (arch, call_addr, imm_hint, targets)) {
+		return false;
+	}
+	for (ut64 target : targets) {
+		RCoreLock core (arch->getCore ());
+		if (materialize_function_at_target (core, target)) {
+			*out_target = target;
+			return true;
 		}
 	}
-	return {};
+	*out_target = targets.front ();
+	return true;
+}
+
+static std::string resolve_sbpf_internal_call_name(
+	R2Architecture *arch,
+	const Address &call_addr,
+	uint64_t imm_hint)
+{
+	ut64 target = 0;
+	if (!resolve_sbpf_internal_call_target_with_hint (arch, call_addr, imm_hint, &target)) {
+		return {};
+	}
+	RCoreLock core (arch->getCore ());
+	return name_for_target_or_autocreate (core, target);
+}
+
+bool resolve_sbpf_internal_call_target(
+	R2Architecture *arch,
+	const PcodeOp *op,
+	uint64_t *out_target)
+{
+	if (!arch || !op || !out_target) {
+		return false;
+	}
+	if (op->code () != CPUI_CALL || op->numInput () < 1) {
+		return false;
+	}
+	const Varnode *target = op->getIn (0);
+	if (!target || !target->isConstant ()) {
+		return false;
+	}
+	return resolve_sbpf_internal_call_target_with_hint (
+		arch,
+		op->getAddr (),
+		target->getOffset (),
+		out_target);
 }
 
 std::string resolve_sbpf_call_name(R2Architecture *arch, const PcodeOp *op) {
