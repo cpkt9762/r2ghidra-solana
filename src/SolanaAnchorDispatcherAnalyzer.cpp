@@ -917,6 +917,7 @@ static void apply_dispatcher_comment(
 	size_t resolved_targets,
 	size_t total_targets,
 	size_t unique_discriminators,
+	size_t named_discriminators,
 	const std::string &idl_path)
 {
 	if (!core || !core->anal) {
@@ -924,7 +925,8 @@ static void apply_dispatcher_comment(
 	}
 	std::ostringstream comment;
 	comment << "solana.anchor.dispatch targets=" << resolved_targets << "/" << total_targets
-		<< " unique_disc=" << unique_discriminators;
+		<< " unique_disc=" << unique_discriminators
+		<< " named_disc=" << named_discriminators;
 	const std::string idl_base = basename_of(idl_path);
 	if (!idl_base.empty()) {
 		comment << " idl=" << idl_base;
@@ -1245,12 +1247,20 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 			has_anchor_builtin = true;
 		}
 	}
+	size_t named_disc_count = 0;
+	for (ut64 disc : unique_discs) {
+		if (disc_to_name.find(disc) != disc_to_name.end()) {
+			++named_disc_count;
+		}
+	}
+	const bool strong_named_disc_coverage = unique_discs.size() >= 8
+		&& named_disc_count * 100 >= unique_discs.size() * 60;
 
 	// Only apply automatic ix.* renames on high-confidence dispatcher functions.
 	if (target_to_disc.size() < 8 || unique_discs.size() < 8) {
 		return;
 	}
-	if (!has_anchor_builtin && unique_discs.size() < 12) {
+	if (!has_anchor_builtin && !strong_named_disc_coverage && unique_discs.size() < 12) {
 		return;
 	}
 	if (target_to_disc.size() * 2 < calls_by_target.size()) {
@@ -1272,6 +1282,7 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 		target_to_disc.size(),
 		calls_by_target.size(),
 		unique_discs.size(),
+		named_disc_count,
 		idl_path);
 	std::unordered_set<ut64> annotated_callsites;
 	for (const auto &it : target_to_disc) {
