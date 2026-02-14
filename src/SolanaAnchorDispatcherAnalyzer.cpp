@@ -784,6 +784,18 @@ static bool discriminator_complete(const std::array<int, kDiscriminatorLen> &byt
 	return true;
 }
 
+static bool is_anchor_builtin_discriminator(ut64 disc) {
+	switch (disc) {
+	case 0x0a69e9a778bcf440ULL:
+	case 0x40f4bc78a7e9690aULL:
+	case 0x1d9acb512ea545e4ULL:
+		return true;
+	default:
+		break;
+	}
+	return false;
+}
+
 } // namespace
 
 void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, const std::string &idl_path) {
@@ -814,7 +826,10 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 	for (const auto &candidate : candidates) {
 		calls_by_target[candidate.target].push_back(&candidate);
 	}
-	RCoreLock core(arch->getCore());
+
+	std::unordered_map<ut64, ut64> target_to_disc;
+	std::unordered_set<ut64> unique_discs;
+	bool has_anchor_builtin = false;
 	for (const auto &it : calls_by_target) {
 		const ut64 target = it.first;
 		const auto &callsites = it.second;
@@ -853,7 +868,28 @@ void SolanaAnchorDispatcherAnalyzer::run(Funcdata *func, R2Architecture *arch, c
 		if (!have_disc || has_incomplete) {
 			continue;
 		}
-		const ut64 disc = resolved_disc;
+		target_to_disc.emplace(target, resolved_disc);
+		unique_discs.insert(resolved_disc);
+		if (is_anchor_builtin_discriminator(resolved_disc)) {
+			has_anchor_builtin = true;
+		}
+	}
+
+	// Only apply automatic ix.* renames on high-confidence dispatcher functions.
+	if (target_to_disc.size() < 8 || unique_discs.size() < 8) {
+		return;
+	}
+	if (!has_anchor_builtin && unique_discs.size() < 12) {
+		return;
+	}
+	if (target_to_disc.size() * 2 < calls_by_target.size()) {
+		return;
+	}
+
+	RCoreLock core(arch->getCore());
+	for (const auto &it : target_to_disc) {
+		const ut64 target = it.first;
+		const ut64 disc = it.second;
 		auto name_it = disc_to_name.find(disc);
 		std::array<int, kDiscriminatorLen> disc_bytes;
 		disc_bytes.fill(0);
