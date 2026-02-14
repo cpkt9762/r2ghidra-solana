@@ -10,6 +10,7 @@
 using namespace ghidra;
 
 std::string CompilerFromCore(RCore *core);
+static std::string NormalizeSleighIdForAvailableLangs(const std::string &id, const vector<LanguageDescription> &langs);
 
 template<typename T> class BaseMapper {
 	private:
@@ -180,7 +181,9 @@ static const std::map<std::string, ArchMapper> arch_map = {
 	}},
 	{ "bpf", { S("BPF"), S("default"), B(32), E(false) } },
 	{ "ebpf", { S("eBPF"), S("default"), B(32), E(false) } },
-	{ "sbpf", { S("sBPF"), S("default"), B(64), E(false) } }
+	{ "sbpf", { S("sBPF"), S("default"), B(64), E(false) } },
+	{ "sbpfv0", { S("sBPF"), S("v0"), B(64), E(false) } },
+	{ "sbpfv3", { S("sBPF"), S("v3"), B(64), E(false) } }
 };
 
 static const std::map<std::string, std::string> compiler_map = {
@@ -205,6 +208,52 @@ std::string CompilerFromCore(RCore *core) {
 	return comp_it->second;
 }
 
+static size_t FindNthColon(const std::string &s, size_t n) {
+	size_t pos = 0;
+	for (size_t i = 0; i < n; i++) {
+		pos = s.find (':', pos);
+		if (pos == std::string::npos) {
+			return pos;
+		}
+		pos++;
+	}
+	return pos - 1;
+}
+
+static bool HasLanguageId(const vector<LanguageDescription> &langs, const std::string &id) {
+	for (const auto &lang : langs) {
+		if (lang.getId () == id) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static std::string NormalizeSleighIdForAvailableLangs(const std::string &id, const vector<LanguageDescription> &langs) {
+	size_t colon4 = FindNthColon (id, 4);
+	std::string lang_id = colon4 == std::string::npos ? id : id.substr (0, colon4);
+	const std::string sbpf_prefix = "sBPF:LE:64:";
+	if (lang_id.rfind (sbpf_prefix, 0) != 0) {
+		return id;
+	}
+	if (HasLanguageId (langs, lang_id)) {
+		return id;
+	}
+	std::string compiler_suffix = colon4 == std::string::npos ? std::string () : id.substr (colon4);
+	static const char *fallbacks[] = {
+		"sBPF:LE:64:default",
+		"sBPF:LE:64:v0",
+		"sBPF:LE:64:v3",
+		nullptr
+	};
+	for (size_t i = 0; fallbacks[i]; i++) {
+		if (HasLanguageId (langs, fallbacks[i])) {
+			return std::string (fallbacks[i]) + compiler_suffix;
+		}
+	}
+	return id;
+}
+
 std::string SleighIdFromCore(RCore *core) {
 	if (core == nullptr) {
 		return "gcc";
@@ -224,7 +273,7 @@ std::string SleighIdFromCore(RCore *core) {
 	if (arch_it == arch_map.end ()) {
 		throw LowlevelError ("Could not match asm.arch " + std::string(arch) + " to sleigh arch.");
 	}
-	return arch_it->second.Map (core);
+	return NormalizeSleighIdForAvailableLangs (arch_it->second.Map (core), langs);
 }
 
 int ai(RCore *core, std::string cpu, int query) {
@@ -254,25 +303,27 @@ int ai(RCore *core, std::string cpu, int query) {
 }
 
 std::string SleighIdFromSleighAsmConfig(RCore *core, const char *cpu, int bits, bool bigendian, const vector<LanguageDescription> &langs) {
+	if (cpu == nullptr || cpu[0] == '\0') {
+		return std::string ();
+	}
 	const char *colon = strchr (cpu, ':');
 	if (colon != nullptr && colon[1] != '\0') {
 		// complete id specified
-		return cpu;
+		return NormalizeSleighIdForAvailableLangs (cpu, langs);
 	}
 	auto arch_it = arch_map.find(cpu);
 	if (arch_it != arch_map.end()) {
-		return arch_it->second.Map (core);
+		return NormalizeSleighIdForAvailableLangs (arch_it->second.Map (core), langs);
 	}
-	const ArchMapper *am = &arch_it->second;
 	// short form if possible
 	std::string low_cpu = tolower (cpu);
 	for (const auto &lang : langs) {
 		auto proc = lang.getProcessor();
 		if (tolower (proc) == low_cpu) {
-			return proc
+			return NormalizeSleighIdForAvailableLangs (proc
 				+ ":" + (bigendian ? "BE" : "LE")
 				+ ":" + to_string (bits)
-				+ ":" + "default";
+				+ ":" + "default", langs);
 		}
 	}
 	return cpu;

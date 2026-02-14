@@ -1,0 +1,34 @@
+diff --git a/src/Processors/sBPF/data/languages/sBPF.ldefs b/src/Processors/sBPF/data/languages/sBPF.ldefs
+index 8ceec10..4f1495c 100644
+--- a/src/Processors/sBPF/data/languages/sBPF.ldefs
++++ b/src/Processors/sBPF/data/languages/sBPF.ldefs
+@@ -11,5 +11,29 @@
+      <description>sBPF processor 64-bit little-endian</description>
+      <compiler name="default" spec="sBPF.cspec" id="default"/>
+  	<external_name tool="DWARF.register.mapping.file" name="sBPF.dwarf"/>
++  </language>
++    <language processor="sBPF"
++             endian="little"
++             size="64"
++             variant="v0"
++             version="1.0"
++             slafile="sBPF.sla"
++             processorspec="sBPF.pspec"
++             id="sBPF:LE:64:v0">
++     <description>sBPF processor 64-bit little-endian (Solana v0)</description>
++     <compiler name="default" spec="sBPF.cspec" id="default"/>
++ 	<external_name tool="DWARF.register.mapping.file" name="sBPF.dwarf"/>
++  </language>
++    <language processor="sBPF"
++             endian="little"
++             size="64"
++             variant="v3"
++             version="1.0"
++             slafile="sBPF.sla"
++             processorspec="sBPF.pspec"
++             id="sBPF:LE:64:v3">
++     <description>sBPF processor 64-bit little-endian (Solana v3)</description>
++     <compiler name="default" spec="sBPF.cspec" id="default"/>
++ 	<external_name tool="DWARF.register.mapping.file" name="sBPF.dwarf"/>
+   </language>
+ </language_definitions>
