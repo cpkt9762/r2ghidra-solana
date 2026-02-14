@@ -53,6 +53,27 @@ const char *lookup_offset_symbol(uintb offset) {
 	return nullptr;
 }
 
+constexpr uintb kInputCompensation = 0x10;
+constexpr const char *kInputCompensationSymbol = "COUNTER_DATA_COMPENSATION";
+
+bool is_instruction_tail_offset(uintb offset) {
+	switch (offset) {
+	case 0x7938:
+	case 0x7940:
+	case 0x7942:
+		return true;
+	default:
+		return false;
+	}
+}
+
+const char *lookup_compensated_offset_symbol(uintb offset) {
+	if (!is_instruction_tail_offset(offset)) {
+		return nullptr;
+	}
+	return lookup_offset_symbol(offset);
+}
+
 bool try_resolve_constant_varnode(const Varnode *vn, uintb &out, int depth = 8) {
 	if (!vn || depth <= 0) {
 		return false;
@@ -220,6 +241,36 @@ bool try_resolve_input_relative_offset_impl(
 		}
 		break;
 	}
+	case CPUI_MULTIEQUAL: {
+		bool seen = false;
+		int64_t merged = 0;
+		for (int4 i = 0; i < def->numInput(); ++i) {
+			int64_t cur = 0;
+			if (!try_resolve_input_relative_offset_impl(def->getIn(i), input_root, cur, visited, depth - 1)) {
+				return false;
+			}
+			if (!seen) {
+				merged = cur;
+				seen = true;
+				continue;
+			}
+			if (cur == merged) {
+				continue;
+			}
+			const bool plain_and_comp =
+				((merged == 0 && cur == static_cast<int64_t>(kInputCompensation))
+				|| (merged == static_cast<int64_t>(kInputCompensation) && cur == 0));
+			if (!plain_and_comp) {
+				return false;
+			}
+			merged = 0;
+		}
+		if (seen) {
+			out = merged;
+			return true;
+		}
+		break;
+	}
 	default:
 		break;
 	}
@@ -236,18 +287,73 @@ bool try_resolve_input_relative_offset(
 	return try_resolve_input_relative_offset_impl(vn, input_root, out, visited, depth);
 }
 
-void maybe_mark_input_offset_constant(const Varnode *vn, R2Architecture *arch) {
-	if (!vn || !arch || !vn->isConstant()) {
-		return;
-	}
-	const char *symbol = lookup_offset_symbol(vn->getOffset());
-	if (!symbol) {
+void set_input_offset_hint(const Varnode *vn, const char *symbol, R2Architecture *arch) {
+	if (!vn || !arch || !vn->isConstant() || !symbol || !*symbol) {
 		return;
 	}
 	R2Architecture::SolanaInputOffsetHint hint;
 	hint.symbol = symbol;
 	hint.value = vn->getOffset();
 	arch->setSolanaInputOffsetHint(vn->getCreateIndex(), hint);
+}
+
+bool varnode_uses_instruction_tail_offsets_impl(
+	const Varnode *vn,
+	std::unordered_set<uint4> &visited,
+	int depth = 8)
+{
+	if (!vn || depth <= 0) {
+		return false;
+	}
+	const uint4 idx = vn->getCreateIndex();
+	if (visited.find(idx) != visited.end()) {
+		return false;
+	}
+	visited.insert(idx);
+
+	for (auto iter = vn->beginDescend(); iter != vn->endDescend(); ++iter) {
+		const PcodeOp *use = *iter;
+		if (!use) {
+			continue;
+		}
+		for (int4 i = 0; i < use->numInput(); ++i) {
+			uintb cst = 0;
+			if (try_resolve_constant_varnode(use->getIn(i), cst, 6) && is_instruction_tail_offset(cst)) {
+				return true;
+			}
+		}
+		switch (use->code()) {
+		case CPUI_COPY:
+		case CPUI_CAST:
+		case CPUI_INT_ZEXT:
+		case CPUI_INT_SEXT:
+		case CPUI_MULTIEQUAL:
+			if (varnode_uses_instruction_tail_offsets_impl(use->getOut(), visited, depth - 1)) {
+				return true;
+			}
+			break;
+		default:
+			break;
+		}
+	}
+	return false;
+}
+
+bool varnode_uses_instruction_tail_offsets(const Varnode *vn) {
+	std::unordered_set<uint4> visited;
+	return varnode_uses_instruction_tail_offsets_impl(vn, visited);
+}
+
+bool looks_like_compensation_base(const Varnode *vn, const Varnode *input_root) {
+	if (!vn || !input_root) {
+		return false;
+	}
+	int64_t base_offset = 0;
+	if (!try_resolve_input_relative_offset(vn, input_root, base_offset)
+			|| base_offset != static_cast<int64_t>(kInputCompensation)) {
+		return false;
+	}
+	return varnode_uses_instruction_tail_offsets(vn);
 }
 
 const Varnode *find_input_root(Funcdata *func, R2Architecture *arch) {
@@ -299,36 +405,38 @@ void SolanaInputOffsetAnalyzer::run(Funcdata *func, R2Architecture *arch) {
 		if (op->numInput() < 2) {
 			continue;
 		}
-
-		if (op->code() == CPUI_PTRADD && op->numInput() >= 3) {
-			int64_t base_offset = 0;
-			if (try_resolve_input_relative_offset(op->getIn(0), input_root, base_offset) && base_offset == 0) {
-				uintb idx = 0;
-				uintb stride = 0;
-				if (try_resolve_constant_varnode(op->getIn(1), idx) && try_resolve_constant_varnode(op->getIn(2), stride)) {
-					const uintb offset = idx * stride;
-					if (lookup_offset_symbol(offset)) {
-						maybe_mark_input_offset_constant(op->getIn(1), arch);
-					}
-				}
-			}
-			continue;
-		}
+		const bool output_is_compensation_base = looks_like_compensation_base(op->getOut(), input_root);
 
 		for (int4 i = 0; i < op->numInput(); ++i) {
 			const Varnode *candidate = op->getIn(i);
 			if (!candidate || !candidate->isConstant()) {
 				continue;
 			}
-			const int4 other_i = (i == 0) ? 1 : 0;
-			if (other_i >= op->numInput()) {
-				continue;
+			const char *symbol = nullptr;
+			for (int4 j = 0; j < op->numInput(); ++j) {
+				if (j == i) {
+					continue;
+				}
+				int64_t base_offset = 0;
+				if (!try_resolve_input_relative_offset(op->getIn(j), input_root, base_offset)) {
+					continue;
+				}
+				if (base_offset == 0) {
+					if (candidate->getOffset() == kInputCompensation && output_is_compensation_base) {
+						symbol = kInputCompensationSymbol;
+					} else {
+						symbol = lookup_offset_symbol(candidate->getOffset());
+					}
+				} else if (base_offset == static_cast<int64_t>(kInputCompensation)) {
+					symbol = lookup_compensated_offset_symbol(candidate->getOffset());
+				}
+				if (symbol) {
+					break;
+				}
 			}
-			int64_t base_offset = 0;
-			if (!try_resolve_input_relative_offset(op->getIn(other_i), input_root, base_offset) || base_offset != 0) {
-				continue;
+			if (symbol) {
+				set_input_offset_hint(candidate, symbol, arch);
 			}
-			maybe_mark_input_offset_constant(candidate, arch);
 		}
 	}
 }
