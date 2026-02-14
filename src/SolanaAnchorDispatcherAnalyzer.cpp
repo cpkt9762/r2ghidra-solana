@@ -966,14 +966,10 @@ static void apply_ix_signature_and_comment(
 	sig_text << "uint64_t " << fcn->name << "(";
 	if (effective_arity == 0) {
 		sig_text << "void";
-	} else if (effective_arity == 1) {
+	} else if (effective_arity >= 1 && effective_arity <= 16) {
 		sig_text << "void *ctx";
-	} else if (effective_arity > 1 && effective_arity <= 16) {
-		for (int i = 0; i < effective_arity; ++i) {
-			if (i > 0) {
-				sig_text << ", ";
-			}
-			sig_text << "uint64_t arg" << i;
+		for (int i = 1; i < effective_arity; ++i) {
+			sig_text << ", uint64_t arg" << i;
 		}
 	} else {
 		sig_text << "...";
