@@ -23,8 +23,6 @@ init()
 ROOT_DIR = pathlib.Path(__file__).resolve().parent
 CRATES_DIR = ROOT_DIR / "crates"
 RLIBS_DIR = ROOT_DIR / "rlibs"
-DEFAULT_SOLANA_VERSION = "1.18.26"
-DEFAULT_FALLBACK_COMPILER_VERSION = "1.18.16"
 
 
 def resolve_versions_file(path_str: str):
@@ -80,16 +78,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--solana-version",
-        default=DEFAULT_SOLANA_VERSION,
-        help="Default compiler Solana version for non-solana-program crates",
+        required=True,
+        help="Solana release version used for crate fetch/build policy",
     )
     parser.add_argument(
         "--compiler-solana-version",
-        help="Force one compiler Solana version for all crates",
+        required=True,
+        help="Compiler Solana version used for primary build attempt",
     )
     parser.add_argument(
         "--fallback-compiler-solana-version",
-        default=DEFAULT_FALLBACK_COMPILER_VERSION,
+        required=True,
         help="Fallback compiler Solana version when rust/cargo compatibility fails",
     )
     parser.add_argument(
@@ -99,6 +98,7 @@ def main():
     )
     parser.add_argument(
         "--platform-tools-version",
+        required=True,
         help="Pass --tools-version to cargo-build-sbf (example: v1.48)",
     )
     parser.add_argument("--cleanup-target", action="store_true", help="Delete crate target/ after copying rlib")
@@ -116,12 +116,7 @@ def main():
     for version in versions:
         version = version.strip()
         try:
-            if args.compiler_solana_version:
-                compiler_versions = [args.compiler_solana_version]
-            elif crate == "solana-program":
-                compiler_versions = [version]
-            else:
-                compiler_versions = [args.solana_version]
+            compiler_versions = [args.compiler_solana_version]
 
             if (not args.disable_compiler_fallback) and args.fallback_compiler_solana_version:
                 if args.fallback_compiler_solana_version not in compiler_versions:

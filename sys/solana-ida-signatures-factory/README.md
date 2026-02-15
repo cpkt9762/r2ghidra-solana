@@ -23,7 +23,13 @@ python3 versions/fetch-crate-versions.py anchor-lang > versions/anchor-lang.txt
 For the `anchor-lang` crate and solana version `1.18.26`:
 
 ```bash
-python3 get-rlibs-from-crate.py --solana-version 1.18.26 --crate anchor-lang --versions-file versions/anchor-lang.txt
+python3 get-rlibs-from-crate.py \
+  --solana-version 1.18.26 \
+  --compiler-solana-version 1.18.16 \
+  --fallback-compiler-solana-version 1.18.16 \
+  --platform-tools-version v1.48 \
+  --crate anchor-lang \
+  --versions-file versions/anchor-lang.txt
 ```
 
 This command automatically downloads the specified solana version into the `solana/` directory, fetches and builds all versions of the `anchor-lang` crate listed in the `versions/anchor-lang.txt` file. After that, for each version the resulted .rlib file is extracted and saved in the `rlibs/<crate-name>/` directory.
@@ -39,26 +45,43 @@ This copy adds compatibility fallback so old Solana toolchains can still build c
 1. `Cargo.lock v4` fallback: drop lock file and rebuild.
 2. `edition2024` fallback: patch `blake3` lock entry `1.8.3 -> 1.8.2`.
 3. `build_hasher_simple_hash_one` fallback: append `ahash = "=0.8.6"` patch.
-4. Compiler fallback: `get-rlibs-from-crate.py` can retry with
-   `--fallback-compiler-solana-version` (default: `1.18.16`).
+4. Compiler fallback: `get-rlibs-from-crate.py` retries with
+   `--fallback-compiler-solana-version` unless `--disable-compiler-fallback` is set.
+
+Required version parameters (no defaults):
+- `--solana-version`
+- `--compiler-solana-version`
+- `--fallback-compiler-solana-version`
+- `--platform-tools-version`
 
 Examples:
 
 ```bash
 # Build one version using default compiler policy
-python3 get-rlibs-from-crate.py --crate solana-program --version 1.17.34
-
-# Force compiler version and keep target/ for release/deps rlibs
 python3 get-rlibs-from-crate.py \
+  --solana-version 1.18.16 \
+  --compiler-solana-version 1.18.16 \
+  --fallback-compiler-solana-version 1.18.16 \
+  --platform-tools-version v1.48 \
+  --crate solana-program \
+  --version 1.17.34
+
+# Explicit compiler/fallback + tools version
+python3 get-rlibs-from-crate.py \
+  --solana-version 1.18.16 \
   --crate solana-program \
   --version 1.17.34 \
-  --compiler-solana-version 1.18.16
+  --compiler-solana-version 1.18.16 \
+  --fallback-compiler-solana-version 1.18.16 \
+  --platform-tools-version v1.48
 
 # Use newer platform-tools rustc with old solana wrapper
 python3 get-rlibs-from-crate.py \
+  --solana-version 1.18.16 \
   --crate anchor-lang \
   --version 0.29.0 \
   --compiler-solana-version 1.18.16 \
+  --fallback-compiler-solana-version 1.18.16 \
   --platform-tools-version v1.48
 ```
 

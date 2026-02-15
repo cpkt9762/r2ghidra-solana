@@ -12,8 +12,13 @@ Options:
   --work-dir <path>            Working directory (default: /tmp/r2ghidra-sbpf-zigns)
   --factory-dir <path>         solana-ida-signatures-factory path
                                (default: $HOME/Documents/jup/solana-ida-signatures-factory)
-  --solana-version <version>   Solana version used by factory when fetching crates
-                               (default: 1.18.26)
+  --solana-version <version>   Solana release version for factory policy (required with fetch)
+  --compiler-solana-version <v>
+                               Primary Solana compiler version for factory builds (required with fetch)
+  --fallback-compiler-solana-version <v>
+                               Fallback compiler version for compatibility retry (required with fetch)
+  --platform-tools-version <v>
+                               Platform-tools version passed to cargo-build-sbf --tools-version (required with fetch)
   --sbpf-target <triple>       Rust sbpf target for rustlib scan
                                (default: sbpfv3-solana-solana)
   --rustlib-dir <path>         Override rustlib directory
@@ -80,7 +85,10 @@ OUT_DB=""
 WORK_DIR="${TMPDIR:-/tmp}/r2ghidra-sbpf-zigns"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FACTORY_DIR="${SCRIPT_DIR}/solana-ida-signatures-factory"
-SOLANA_VERSION="1.18.26"
+SOLANA_VERSION=""
+COMPILER_SOLANA_VERSION=""
+FALLBACK_COMPILER_SOLANA_VERSION=""
+PLATFORM_TOOLS_VERSION=""
 SBPF_TARGET="sbpfv3-solana-solana"
 RUSTLIB_DIR=""
 FETCH_CRATES=1
@@ -111,6 +119,18 @@ while [ "$#" -gt 0 ]; do
 		;;
 	--solana-version)
 		SOLANA_VERSION="$2"
+		shift 2
+		;;
+	--compiler-solana-version)
+		COMPILER_SOLANA_VERSION="$2"
+		shift 2
+		;;
+	--fallback-compiler-solana-version)
+		FALLBACK_COMPILER_SOLANA_VERSION="$2"
+		shift 2
+		;;
+	--platform-tools-version)
+		PLATFORM_TOOLS_VERSION="$2"
 		shift 2
 		;;
 	--sbpf-target)
@@ -195,6 +215,12 @@ if [ "$FETCH_CRATES" -eq 1 ]; then
 	[ -d "$FACTORY_DIR" ] || die "Factory directory not found: $FACTORY_DIR"
 	[ -f "$FACTORY_DIR/get-rlibs-from-crate.py" ] || die "Missing factory script: $FACTORY_DIR/get-rlibs-from-crate.py"
 	command -v python3 >/dev/null 2>&1 || die "python3 not found (required for crate fetch)"
+	if [ "${#CRATE_SPECS[@]}" -gt 0 ] || [ "${#CRATE_FILE_SPECS[@]}" -gt 0 ]; then
+		[ -n "$SOLANA_VERSION" ] || die "--solana-version is required when fetching crates"
+		[ -n "$COMPILER_SOLANA_VERSION" ] || die "--compiler-solana-version is required when fetching crates"
+		[ -n "$FALLBACK_COMPILER_SOLANA_VERSION" ] || die "--fallback-compiler-solana-version is required when fetching crates"
+		[ -n "$PLATFORM_TOOLS_VERSION" ] || die "--platform-tools-version is required when fetching crates"
+	fi
 fi
 
 WORK_DIR="$(resolve_abs_path "$WORK_DIR")"
@@ -228,10 +254,16 @@ if [ "$FETCH_CRATES" -eq 1 ]; then
 		version_list="${spec#*:}"
 		IFS=',' read -r -a versions <<< "$version_list"
 		for version in "${versions[@]}"; do
-			log "Factory fetch crate=$crate version=$version solana=$SOLANA_VERSION"
+			log "Factory fetch crate=$crate version=$version solana=$SOLANA_VERSION compiler=$COMPILER_SOLANA_VERSION tools=$PLATFORM_TOOLS_VERSION"
 			(
 				cd "$FACTORY_DIR"
-				python3 get-rlibs-from-crate.py --solana-version "$SOLANA_VERSION" --crate "$crate" --version "$version"
+				python3 get-rlibs-from-crate.py \
+					--solana-version "$SOLANA_VERSION" \
+					--compiler-solana-version "$COMPILER_SOLANA_VERSION" \
+					--fallback-compiler-solana-version "$FALLBACK_COMPILER_SOLANA_VERSION" \
+					--platform-tools-version "$PLATFORM_TOOLS_VERSION" \
+					--crate "$crate" \
+					--version "$version"
 			)
 		done
 		collect_factory_rlibs_for_crate "$crate"
@@ -239,10 +271,16 @@ if [ "$FETCH_CRATES" -eq 1 ]; then
 	for spec in "${CRATE_FILE_SPECS[@]}"; do
 		crate="${spec%%:*}"
 		versions_file="${spec#*:}"
-		log "Factory fetch crate=$crate versions-file=$versions_file solana=$SOLANA_VERSION"
+		log "Factory fetch crate=$crate versions-file=$versions_file solana=$SOLANA_VERSION compiler=$COMPILER_SOLANA_VERSION tools=$PLATFORM_TOOLS_VERSION"
 		(
 			cd "$FACTORY_DIR"
-			python3 get-rlibs-from-crate.py --solana-version "$SOLANA_VERSION" --crate "$crate" --versions-file "$versions_file"
+			python3 get-rlibs-from-crate.py \
+				--solana-version "$SOLANA_VERSION" \
+				--compiler-solana-version "$COMPILER_SOLANA_VERSION" \
+				--fallback-compiler-solana-version "$FALLBACK_COMPILER_SOLANA_VERSION" \
+				--platform-tools-version "$PLATFORM_TOOLS_VERSION" \
+				--crate "$crate" \
+				--versions-file "$versions_file"
 		)
 		collect_factory_rlibs_for_crate "$crate"
 	done
