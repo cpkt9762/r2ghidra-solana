@@ -53,6 +53,13 @@ python3 get-rlibs-from-crate.py \
   --crate solana-program \
   --version 1.17.34 \
   --compiler-solana-version 1.18.16
+
+# Use newer platform-tools rustc with old solana wrapper
+python3 get-rlibs-from-crate.py \
+  --crate anchor-lang \
+  --version 0.29.0 \
+  --compiler-solana-version 1.18.16 \
+  --platform-tools-version v1.48
 ```
 
 ### Collect compiled rlibs (including Rust core/std)

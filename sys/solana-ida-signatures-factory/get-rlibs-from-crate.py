@@ -97,6 +97,10 @@ def main():
         action="store_true",
         help="Do not retry failed builds with fallback compiler version",
     )
+    parser.add_argument(
+        "--platform-tools-version",
+        help="Pass --tools-version to cargo-build-sbf (example: v1.48)",
+    )
     parser.add_argument("--cleanup-target", action="store_true", help="Delete crate target/ after copying rlib")
     parser.add_argument("--cleanup-solana", action="store_true", help="Run remove-solana.sh after each version")
     parser.add_argument("--crate", required=True, help="The crate to get the rlib from")
@@ -133,7 +137,13 @@ def main():
                     f"with compiler Solana {compiler_version} "
                     f"(attempt {i + 1}/{len(compiler_versions)})"
                 )
-                ok, status = build_crate(crate, version, compiler_version, only_rlib=True)
+                ok, status = build_crate(
+                    crate,
+                    version,
+                    compiler_version,
+                    only_rlib=True,
+                    tools_version=args.platform_tools_version,
+                )
                 last_status = status
                 if ok:
                     built = True

@@ -2,6 +2,7 @@ import argparse
 import os
 import pathlib
 import subprocess
+from typing import Optional
 
 try:
     from colorama import Fore, Style, init
@@ -149,13 +150,16 @@ def patch_blake3_lock(crate_dir: pathlib.Path):
     return True
 
 
-def run_build(crate_dir: pathlib.Path, cargo_build_sbf: pathlib.Path):
+def run_build(crate_dir: pathlib.Path, cargo_build_sbf: pathlib.Path, tools_version: Optional[str] = None):
     rustc_env = os.environ.copy()
     rustc_env["RUSTFLAGS"] = "-C overflow-checks=on"
-    return run_cmd([str(cargo_build_sbf)], cwd=crate_dir, env=rustc_env)
+    cmd = [str(cargo_build_sbf)]
+    if tools_version:
+        cmd.extend(["--tools-version", tools_version])
+    return run_cmd(cmd, cwd=crate_dir, env=rustc_env)
 
 
-def build_crate(crate: str, version: str, solana_version: str, only_rlib=True):
+def build_crate(crate: str, version: str, solana_version: str, only_rlib=True, tools_version: Optional[str] = None):
     del only_rlib
     if not ensure_solana_release(solana_version):
         print(f"{Fore.RED}Failed to install solana version {solana_version}{Style.RESET_ALL}")
@@ -178,10 +182,10 @@ def build_crate(crate: str, version: str, solana_version: str, only_rlib=True):
     last_status = ""
 
     for _attempt in range(1, 6):
-        _code, status = run_build(crate_dir, cargo_build_sbf)
+        code, status = run_build(crate_dir, cargo_build_sbf, tools_version=tools_version)
         last_status = status
         print(status)
-        if "Finished release" in status:
+        if code == 0:
             print(f"{Fore.GREEN}Crate {crate} version {version} built successfully!{Style.RESET_ALL}")
             return True, status
 
