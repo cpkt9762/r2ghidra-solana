@@ -55,6 +55,22 @@ python3 get-rlibs-from-crate.py \
   --compiler-solana-version 1.18.16
 ```
 
+### Collect compiled rlibs (including Rust core/std)
+
+After building crates, export everything to a versioned directory tree:
+
+```bash
+bash collect-compiled-rlibs.sh /tmp/r2ghidra-solana-rlibs-by-version
+```
+
+This includes:
+- toolchain core libs: `core/alloc/compiler_builtins/std` from `~/.cache/solana/*` (`sbf*`/`sbpfv3*` targets)
+- compiled `solana-program` release + release/deps rlibs from `crates/*/target/{sbf-solana-solana,sbpfv3-solana-solana}/release`
+- exported top-level rlibs from `rlibs/`
+
+And writes:
+- `/tmp/r2ghidra-solana-rlibs-by-version/RLIB_PATHS.txt`
+
 ### Generate .pat files via FLAIR preprocessor
 
 ```
