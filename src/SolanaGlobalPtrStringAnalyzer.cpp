@@ -335,6 +335,7 @@ void discover_strings_from_ptr_len_tables(
 	RCore *core,
 	const std::vector<AddressRange> &rodata_ranges,
 	const std::vector<AddressRange> &table_ranges,
+	bool allow_direct_rodata_scan,
 	std::unordered_map<ut64, std::string> &value_to_symbol)
 {
 	std::unordered_map<PtrLenKey, DiscoveredString, PtrLenKeyHash> by_ptr_len;
@@ -396,6 +397,62 @@ void discover_strings_from_ptr_len_tables(
 			value_to_symbol.emplace(slot_addr, ptr_name);
 		}
 	}
+
+	if (!allow_direct_rodata_scan) {
+		return;
+	}
+	for (const auto &range : rodata_ranges) {
+		if (range.size < 4 || range.size > static_cast<ut64>(std::numeric_limits<int>::max())) {
+			continue;
+		}
+		std::vector<uint1> bytes(static_cast<size_t>(range.size));
+		if (!read_virtual(core, range.start, bytes.data(), bytes.size())) {
+			continue;
+		}
+		size_t i = 0;
+		while (i < bytes.size()) {
+			uint1 c = bytes[i];
+			const bool printable_head = (c == '\n' || c == '\r' || c == '\t' || (c >= 0x20 && c <= 0x7e));
+			if (!printable_head || c == 0) {
+				++i;
+				continue;
+			}
+			size_t j = i;
+			bool malformed = false;
+			while (j < bytes.size() && (j - i) < static_cast<size_t>(kMaxStringBytes)) {
+				uint1 ch = bytes[j];
+				if (ch == 0) {
+					break;
+				}
+				if (!(ch == '\n' || ch == '\r' || ch == '\t' || (ch >= 0x20 && ch <= 0x7e))) {
+					malformed = true;
+					break;
+				}
+				++j;
+			}
+			if (malformed || j >= bytes.size() || bytes[j] != 0) {
+				++i;
+				continue;
+			}
+			const size_t len = j - i;
+			if (len < 4) {
+				i = j + 1;
+				continue;
+			}
+			std::vector<uint1> text(bytes.begin() + static_cast<ptrdiff_t>(i), bytes.begin() + static_cast<ptrdiff_t>(j));
+			if (!looks_like_text_buffer(text)) {
+				i = j + 1;
+				continue;
+			}
+			const ut64 ptr = range.start + static_cast<ut64>(i);
+			DiscoveredString *d = register_discovered_string(
+				core, by_ptr_len, value_to_symbol, ptr, static_cast<ut64>(len), text);
+			if (d) {
+				value_to_symbol.emplace(ptr, d->string_flag_name);
+			}
+			i = j + 1;
+		}
+	}
 }
 
 void apply_symbols_to_constant_hints(
@@ -444,12 +501,15 @@ void SolanaGlobalPtrStringAnalyzer::run(Funcdata *func, R2Architecture *arch) {
 		std::vector<AddressRange> table_ranges;
 		std::vector<AddressRange> text_ranges;
 		collect_section_ranges(core, rodata_ranges, table_ranges, &text_ranges);
+		bool used_text_fallback = false;
 		if (rodata_ranges.empty() && !text_ranges.empty()) {
 			// sBPF v0 commonly keeps rodata in .text; use it as conservative fallback.
 			rodata_ranges = text_ranges;
+			used_text_fallback = true;
 		}
 		if (!rodata_ranges.empty() && !table_ranges.empty()) {
-			discover_strings_from_ptr_len_tables(core, rodata_ranges, table_ranges, value_to_symbol);
+			discover_strings_from_ptr_len_tables(
+				core, rodata_ranges, table_ranges, !used_text_fallback, value_to_symbol);
 		}
 	}
 	apply_symbols_to_constant_hints(func, arch, value_to_symbol);
