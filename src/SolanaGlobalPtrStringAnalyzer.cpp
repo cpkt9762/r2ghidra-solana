@@ -244,6 +244,54 @@ bool looks_like_base58_pubkey(const std::vector<uint1> &buf) {
 	return true;
 }
 
+bool is_base58_char(uint1 ch) {
+	const bool in_1_9 = ch >= '1' && ch <= '9';
+	const bool in_A_H = ch >= 'A' && ch <= 'H';
+	const bool in_J_N = ch >= 'J' && ch <= 'N';
+	const bool in_P_Z = ch >= 'P' && ch <= 'Z';
+	const bool in_a_k = ch >= 'a' && ch <= 'k';
+	const bool in_m_z = ch >= 'm' && ch <= 'z';
+	return in_1_9 || in_A_H || in_J_N || in_P_Z || in_a_k || in_m_z;
+}
+
+void collect_base58_pubkey_spans(
+	const std::vector<uint1> &buf,
+	std::vector<std::pair<size_t, size_t>> &spans)
+{
+	spans.clear();
+	size_t i = 0;
+	while (i < buf.size()) {
+		if (!is_base58_char(buf[i])) {
+			++i;
+			continue;
+		}
+		size_t j = i;
+		while (j < buf.size() && is_base58_char(buf[j])) {
+			++j;
+		}
+		const size_t len = j - i;
+		if (len >= 32 && len <= 44) {
+			bool has_digit = false;
+			bool has_upper = false;
+			bool has_lower = false;
+			for (size_t k = i; k < j; ++k) {
+				uint1 ch = buf[k];
+				if (ch >= '1' && ch <= '9') {
+					has_digit = true;
+				} else if (ch >= 'A' && ch <= 'Z') {
+					has_upper = true;
+				} else if (ch >= 'a' && ch <= 'z') {
+					has_lower = true;
+				}
+			}
+			if (has_digit && has_upper && has_lower) {
+				spans.emplace_back(i, len);
+			}
+		}
+		i = j;
+	}
+}
+
 std::string hex_u64(ut64 v) {
 	std::ostringstream out;
 	out << std::hex << v;
@@ -331,6 +379,40 @@ DiscoveredString *register_discovered_string(
 	return &it->second;
 }
 
+void register_embedded_pubkeys(
+	RCore *core,
+	std::unordered_map<PtrLenKey, DiscoveredString, PtrLenKeyHash> &by_ptr_len,
+	std::unordered_map<ut64, std::string> &value_to_symbol,
+	ut64 base_ptr,
+	const std::vector<uint1> &bytes)
+{
+	if (bytes.size() < 32) {
+		return;
+	}
+	std::vector<std::pair<size_t, size_t>> spans;
+	collect_base58_pubkey_spans(bytes, spans);
+	for (const auto &span : spans) {
+		if (span.second < 32 || span.second > 44) {
+			continue;
+		}
+		const size_t start = span.first;
+		const size_t len = span.second;
+		std::vector<uint1> token(
+			bytes.begin() + static_cast<ptrdiff_t>(start),
+			bytes.begin() + static_cast<ptrdiff_t>(start + len));
+		DiscoveredString *d = register_discovered_string(
+			core,
+			by_ptr_len,
+			value_to_symbol,
+			base_ptr + static_cast<ut64>(start),
+			static_cast<ut64>(len),
+			token);
+		if (d && d->is_pubkey) {
+			value_to_symbol.emplace(base_ptr + static_cast<ut64>(start), d->string_flag_name);
+		}
+	}
+}
+
 void discover_strings_from_ptr_len_tables(
 	RCore *core,
 	const std::vector<AddressRange> &rodata_ranges,
@@ -362,6 +444,9 @@ void discover_strings_from_ptr_len_tables(
 				continue;
 			}
 			DiscoveredString *d = register_discovered_string(core, by_ptr_len, value_to_symbol, ptr, len, bytes);
+			if (d && !d->is_pubkey) {
+				register_embedded_pubkeys(core, by_ptr_len, value_to_symbol, ptr, bytes);
+			}
 			const ut64 slot_addr = table.start + static_cast<ut64>(off);
 			const std::string ptr_name = make_ptr_flag_name(slot_addr, d->is_pubkey);
 			apply_flag(core, R_FLAGS_FS_SYMBOLS, ptr_name, slot_addr, 16);
@@ -391,6 +476,9 @@ void discover_strings_from_ptr_len_tables(
 			}
 			DiscoveredString *d = register_discovered_string(
 				core, by_ptr_len, value_to_symbol, ptr, bytes.size(), bytes);
+			if (d && !d->is_pubkey) {
+				register_embedded_pubkeys(core, by_ptr_len, value_to_symbol, ptr, bytes);
+			}
 			const ut64 slot_addr = table.start + static_cast<ut64>(off);
 			const std::string ptr_name = make_ptr_flag_name(slot_addr, d->is_pubkey);
 			apply_flag(core, R_FLAGS_FS_SYMBOLS, ptr_name, slot_addr, 8);
@@ -449,6 +537,9 @@ void discover_strings_from_ptr_len_tables(
 				core, by_ptr_len, value_to_symbol, ptr, static_cast<ut64>(len), text);
 			if (d) {
 				value_to_symbol.emplace(ptr, d->string_flag_name);
+				if (!d->is_pubkey) {
+					register_embedded_pubkeys(core, by_ptr_len, value_to_symbol, ptr, text);
+				}
 			}
 			i = j + 1;
 		}
