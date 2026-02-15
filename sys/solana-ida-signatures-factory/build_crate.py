@@ -113,6 +113,17 @@ def drop_lockfile(crate_dir: pathlib.Path):
     return True
 
 
+def downgrade_lockfile_v4(crate_dir: pathlib.Path):
+    lock_file = crate_dir / "Cargo.lock"
+    if not lock_file.exists():
+        return False
+    txt = lock_file.read_text()
+    if "version = 4" not in txt:
+        return False
+    lock_file.write_text(txt.replace("version = 4", "version = 3", 1))
+    return True
+
+
 def patch_blake3_lock(crate_dir: pathlib.Path):
     lock_file = crate_dir / "Cargo.lock"
     if not lock_file.exists():
@@ -149,6 +160,7 @@ def build_crate(crate: str, version: str, solana_version: str, only_rlib=True):
     print(f"{Fore.BLUE}Building crate {crate} version {version} with toolchain {solana_version}...{Style.RESET_ALL}")
     patched_ahash = False
     patched_lock = False
+    downgraded_lock = False
     patched_blake3 = False
     last_status = ""
 
@@ -164,6 +176,12 @@ def build_crate(crate: str, version: str, solana_version: str, only_rlib=True):
             print(f"{Fore.YELLOW}[compat] applying ahash pin...{Style.RESET_ALL}")
             patched_ahash = apply_ahash_patch(crate_dir)
             if patched_ahash:
+                continue
+
+        if (not downgraded_lock) and LOCKFILE_V4_HINT in status:
+            print(f"{Fore.YELLOW}[compat] downgrading Cargo.lock version 4 -> 3...{Style.RESET_ALL}")
+            downgraded_lock = downgrade_lockfile_v4(crate_dir)
+            if downgraded_lock:
                 continue
 
         if (not patched_lock) and LOCKFILE_V4_HINT in status:
