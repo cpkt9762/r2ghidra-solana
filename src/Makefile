@@ -18,6 +18,7 @@ R2GHIDRA_SRCS+=SolanaAnchorDispatcherAnalyzer.cpp
 R2GHIDRA_SRCS+=SolanaGlobalPtrStringAnalyzer.cpp
 R2GHIDRA_SRCS+=SolanaInputOffsetAnalyzer.cpp
 R2GHIDRA_SRCS+=SolanaStringFromPtrLenAnalyzer.cpp
+R2GHIDRA_SRCS+=SolanaStructFieldHintAnalyzer.cpp
 
 R2GHIDRA_SRCS+=SleighAnalValue.cpp
 R2GHIDRA_SRCS+=SleighAsm.cpp

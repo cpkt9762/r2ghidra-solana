@@ -11,6 +11,7 @@
 #include "SolanaGlobalPtrStringAnalyzer.h"
 #include "SolanaInputOffsetAnalyzer.h"
 #include "SolanaStringFromPtrLenAnalyzer.h"
+#include "SolanaStructFieldHintAnalyzer.h"
 #include "r2ghidra.h"
 #include <r_core.h>
 
@@ -198,6 +199,7 @@ static void Decompile(RCore *core, ut64 addr, DecompileMode mode, std::stringstr
 		action->reset (*func);
 		res = action->perform (*func);
 		SolanaInputOffsetAnalyzer::run(func, &arch);
+		SolanaStructFieldHintAnalyzer::run(func, &arch);
 		SolanaGlobalPtrStringAnalyzer::run(func, &arch);
 		SolanaStringFromPtrLenAnalyzer::run(func, &arch);
 		SolanaAnchorDispatcherAnalyzer::run(func, &arch, cfg_var_solana_idl.GetString(core->config));
