@@ -105,6 +105,20 @@ def apply_ahash_patch(crate_dir: pathlib.Path):
     return True
 
 
+def apply_blake3_pin_patch(crate_dir: pathlib.Path):
+    cargo_toml = crate_dir / "Cargo.toml"
+    marker = "blake3 = \"=1.8.2\""
+    txt = cargo_toml.read_text()
+    if marker in txt:
+        return False
+    if "[patch.crates-io]" in txt:
+        txt += "\nblake3 = \"=1.8.2\"\n"
+    else:
+        txt += "\n[patch.crates-io]\nblake3 = \"=1.8.2\"\n"
+    cargo_toml.write_text(txt)
+    return True
+
+
 def drop_lockfile(crate_dir: pathlib.Path):
     lock_file = crate_dir / "Cargo.lock"
     if not lock_file.exists():
@@ -159,9 +173,8 @@ def build_crate(crate: str, version: str, solana_version: str, only_rlib=True):
 
     print(f"{Fore.BLUE}Building crate {crate} version {version} with toolchain {solana_version}...{Style.RESET_ALL}")
     patched_ahash = False
-    patched_lock = False
-    downgraded_lock = False
     patched_blake3 = False
+    patched_blake3_toml = False
     last_status = ""
 
     for _attempt in range(1, 6):
@@ -178,16 +191,12 @@ def build_crate(crate: str, version: str, solana_version: str, only_rlib=True):
             if patched_ahash:
                 continue
 
-        if (not downgraded_lock) and LOCKFILE_V4_HINT in status:
+        if LOCKFILE_V4_HINT in status:
             print(f"{Fore.YELLOW}[compat] downgrading Cargo.lock version 4 -> 3...{Style.RESET_ALL}")
-            downgraded_lock = downgrade_lockfile_v4(crate_dir)
-            if downgraded_lock:
+            if downgrade_lockfile_v4(crate_dir):
                 continue
-
-        if (not patched_lock) and LOCKFILE_V4_HINT in status:
             print(f"{Fore.YELLOW}[compat] dropping Cargo.lock v4...{Style.RESET_ALL}")
-            patched_lock = drop_lockfile(crate_dir)
-            if patched_lock:
+            if drop_lockfile(crate_dir):
                 continue
 
         if (not patched_blake3) and any(h in status for h in EDITION_2024_HINTS):
@@ -195,6 +204,11 @@ def build_crate(crate: str, version: str, solana_version: str, only_rlib=True):
             patched_blake3 = patch_blake3_lock(crate_dir)
             if patched_blake3:
                 continue
+            if not patched_blake3_toml:
+                print(f"{Fore.YELLOW}[compat] pinning blake3 in Cargo.toml to 1.8.2...{Style.RESET_ALL}")
+                patched_blake3_toml = apply_blake3_pin_patch(crate_dir)
+                if patched_blake3_toml:
+                    continue
 
         break
 
