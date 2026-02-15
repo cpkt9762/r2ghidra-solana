@@ -35,10 +35,14 @@ Options:
   --ar <path>                  llvm-ar/ar binary (auto-detect by default)
   --minsz <n>                  zign.minsz (default: 16)
   --mincc <n>                  zign.mincc (default: 10)
+  --namespace-prefix <text>    Prefix used for generated zign names
+                               (default: solana)
   -h, --help                   Show this help
 
 Notes:
   - This script merges zigns incrementally into --out-db with `zos`.
+  - Function names are normalized to: <namespace>__<sanitized_name>__h<hash>.
+    This prevents invalid sdb keys and cross-version name collisions.
   - For large corpora, run with --skip-fetch and pre-populated rlibs to avoid repeated builds.
 EOF
 }
@@ -81,6 +85,87 @@ normalize_spec() {
 	fi
 }
 
+sanitize_token() {
+	local s="$1"
+	s="$(printf '%s' "$s" | sed -E 's/[^A-Za-z0-9_]+/_/g; s/_+/_/g; s/^_+//; s/_+$//')"
+	if [ -z "$s" ]; then
+		s="unnamed"
+	fi
+	printf '%s' "$s"
+}
+
+short_hash() {
+	local input="$1"
+	case "$HASH_TOOL" in
+	shasum)
+		printf '%s' "$input" | shasum -a 256 | awk '{print substr($1, 1, 12)}'
+		;;
+	sha256sum)
+		printf '%s' "$input" | sha256sum | awk '{print substr($1, 1, 12)}'
+		;;
+	cksum)
+		printf '%s' "$input" | cksum | awk '{print $1}'
+		;;
+	*)
+		die "No supported hash tool available"
+		;;
+	esac
+}
+
+build_object_namespace() {
+	local obj="$1"
+	local module_tag
+	local prefix="${WORK_DIR}/objs/"
+	local rel="$obj"
+	if [[ "$obj" == "$prefix"* ]]; then
+		rel="${obj#$prefix}"
+		module_tag="${rel%%/*}"
+	else
+		module_tag="$(basename "$(dirname "$obj")")"
+	fi
+	local ns_prefix
+	local ns_sv
+	local ns_target
+	local ns_module
+	ns_prefix="$(sanitize_token "$NAMESPACE_PREFIX")"
+	ns_sv="$(sanitize_token "${COMPILER_SOLANA_VERSION:-unknown}")"
+	ns_target="$(sanitize_token "${SBPF_TARGET:-unknown}")"
+	ns_module="$(sanitize_token "${module_tag}")"
+	printf '%s__sv_%s__t_%s__m_%s' "$ns_prefix" "$ns_sv" "$ns_target" "$ns_module"
+}
+
+build_r2_zaf_script() {
+	local obj="$1"
+	local script_path="$2"
+	local ns="$3"
+	local count=0
+
+	{
+		echo "aa"
+		while IFS=' ' read -r off name; do
+			[ -n "$off" ] || continue
+			[ -n "$name" ] || continue
+			local base_name
+			base_name="$(sanitize_token "$name")"
+			local digest
+			digest="$(short_hash "${obj}|${off}|${name}")"
+			local suffix="__h${digest}"
+			local max_base_len=$((NAME_MAX_LEN - ${#ns} - ${#suffix} - 2))
+			if [ "$max_base_len" -lt 8 ]; then
+				max_base_len=8
+			fi
+			base_name="${base_name:0:max_base_len}"
+			local zigname="${ns}__${base_name}${suffix}"
+			printf 'zaf %s %s\n' "$name" "$zigname"
+			count=$((count + 1))
+		done < <("$R2_BIN" -2 -q -e scr.color=false -c "aa;afl;q" "$obj" 2>/dev/null | awk '/^0x/ {print $1 " " $NF}')
+		printf 'zos %s\n' "$OUT_DB"
+		echo "q"
+	} > "$script_path"
+
+	[ "$count" -gt 0 ]
+}
+
 OUT_DB=""
 WORK_DIR="${TMPDIR:-/tmp}/r2ghidra-sbpf-zigns"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -95,8 +180,11 @@ FETCH_CRATES=1
 USE_RUST_CORE=1
 R2_BIN="r2"
 AR_BIN=""
+HASH_TOOL=""
 MINSZ=16
 MINCC=10
+NAMESPACE_PREFIX="solana"
+NAME_MAX_LEN=120
 
 declare -a CRATE_SPECS=()
 declare -a CRATE_FILE_SPECS=()
@@ -181,6 +269,10 @@ while [ "$#" -gt 0 ]; do
 		MINCC="$2"
 		shift 2
 		;;
+	--namespace-prefix)
+		NAMESPACE_PREFIX="$2"
+		shift 2
+		;;
 	-h|--help)
 		usage
 		exit 0
@@ -203,6 +295,16 @@ else
 	else
 		die "Neither llvm-ar nor ar found in PATH"
 	fi
+fi
+
+if command -v shasum >/dev/null 2>&1; then
+	HASH_TOOL="shasum"
+elif command -v sha256sum >/dev/null 2>&1; then
+	HASH_TOOL="sha256sum"
+elif command -v cksum >/dev/null 2>&1; then
+	HASH_TOOL="cksum"
+else
+	die "No hash tool found (need shasum, sha256sum or cksum)"
 fi
 
 if [[ "$R2_BIN" == */* ]]; then
@@ -345,9 +447,11 @@ fi
 RLIB_LIST="$WORK_DIR/rlib-files.txt"
 OBJ_LIST="$WORK_DIR/object-files.txt"
 FAIL_LIST="$WORK_DIR/failed-objects.txt"
+R2_CMD_DIR="$WORK_DIR/r2cmds"
 : > "$RLIB_LIST"
 : > "$OBJ_LIST"
 : > "$FAIL_LIST"
+mkdir -p "$R2_CMD_DIR"
 
 while IFS= read -r -d '' f; do
 	printf '%s\n' "$f" >> "$RLIB_LIST"
@@ -399,17 +503,34 @@ failed_objs=0
 
 while IFS= read -r obj; do
 	done_objs=$((done_objs + 1))
-	if "$R2_BIN" -2 -q \
-		-e "zign.mangled=true" \
-		-e "zign.minsz=$MINSZ" \
-		-e "zign.mincc=$MINCC" \
-		-c "aa;zaM;zos $OUT_DB;q" \
-		"$obj" >/dev/null 2>&1; then
-		:
+	cmd_script="$R2_CMD_DIR/$(printf '%08d' "$done_objs").r2"
+	obj_ns="$(build_object_namespace "$obj")"
+	if build_r2_zaf_script "$obj" "$cmd_script" "$obj_ns"; then
+		if "$R2_BIN" -2 -q \
+			-e "zign.minsz=$MINSZ" \
+			-e "zign.mincc=$MINCC" \
+			-i "$cmd_script" \
+			"$obj" >/dev/null 2>&1; then
+			:
+		else
+			warn "r2 failed on object (namespaced mode): $obj"
+			printf '%s\n' "$obj" >> "$FAIL_LIST"
+			failed_objs=$((failed_objs + 1))
+		fi
 	else
-		warn "r2 failed on object: $obj"
-		printf '%s\n' "$obj" >> "$FAIL_LIST"
-		failed_objs=$((failed_objs + 1))
+		warn "Unable to derive function list for object, falling back: $obj"
+		if "$R2_BIN" -2 -q \
+			-e "zign.mangled=true" \
+			-e "zign.minsz=$MINSZ" \
+			-e "zign.mincc=$MINCC" \
+			-c "aa;zaM;zos $OUT_DB;q" \
+			"$obj" >/dev/null 2>&1; then
+			:
+		else
+			warn "r2 failed on object (fallback mode): $obj"
+			printf '%s\n' "$obj" >> "$FAIL_LIST"
+			failed_objs=$((failed_objs + 1))
+		fi
 	fi
 	if [ $((done_objs % 100)) -eq 0 ]; then
 		log "Progress: ${done_objs}/${total_objs} objects"
