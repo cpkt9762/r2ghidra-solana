@@ -179,7 +179,11 @@ def main():
             print(f"{Fore.RED}Error building {crate}:{version}: {e}{Style.RESET_ALL}")
             continue
 
-    print(f"{Fore.BLUE}Done: {success_count}/{len(versions)} versions produced rlibs{Style.RESET_ALL}")
+    total = len(versions)
+    print(f"{Fore.BLUE}Done: {success_count}/{total} versions produced rlibs{Style.RESET_ALL}")
+    if success_count == total:
+        raise SystemExit(0)
+    raise SystemExit(1)
 
 
 if __name__ == "__main__":
