@@ -12,6 +12,7 @@
 #include <r_flag.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <limits.h>
@@ -45,10 +46,16 @@ struct PtrLenKeyHash {
 	}
 };
 
+enum class PubkeyConfidence : uint8_t {
+	None = 0,
+	Maybe = 1,
+	High = 2,
+};
+
 struct DiscoveredString {
 	ut64 ptr = 0;
 	ut64 len = 0;
-	bool is_pubkey = false;
+	PubkeyConfidence pubkey_confidence = PubkeyConfidence::None;
 	std::string text;
 	std::string string_flag_name;
 };
@@ -226,24 +233,6 @@ bool looks_like_text_buffer(const std::vector<uint1> &buf) {
 	return printable * 100 >= buf.size() * 85 && letters_or_digits > 0;
 }
 
-bool looks_like_base58_pubkey(const std::vector<uint1> &buf) {
-	if (buf.size() < 32 || buf.size() > 44) {
-		return false;
-	}
-	for (uint1 ch : buf) {
-		const bool in_1_9 = ch >= '1' && ch <= '9';
-		const bool in_A_H = ch >= 'A' && ch <= 'H';
-		const bool in_J_N = ch >= 'J' && ch <= 'N';
-		const bool in_P_Z = ch >= 'P' && ch <= 'Z';
-		const bool in_a_k = ch >= 'a' && ch <= 'k';
-		const bool in_m_z = ch >= 'm' && ch <= 'z';
-		if (!(in_1_9 || in_A_H || in_J_N || in_P_Z || in_a_k || in_m_z)) {
-			return false;
-		}
-	}
-	return true;
-}
-
 bool is_base58_char(uint1 ch) {
 	const bool in_1_9 = ch >= '1' && ch <= '9';
 	const bool in_A_H = ch >= 'A' && ch <= 'H';
@@ -254,9 +243,56 @@ bool is_base58_char(uint1 ch) {
 	return in_1_9 || in_A_H || in_J_N || in_P_Z || in_a_k || in_m_z;
 }
 
+PubkeyConfidence classify_base58_pubkey(const std::vector<uint1> &buf) {
+	if (buf.size() < 32 || buf.size() > 44) {
+		return PubkeyConfidence::None;
+	}
+	bool has_digit = false;
+	bool has_upper = false;
+	bool has_lower = false;
+	std::array<bool, 128> seen {};
+	size_t unique = 0;
+	for (uint1 ch : buf) {
+		if (!is_base58_char(ch)) {
+			return PubkeyConfidence::None;
+		}
+		if (ch >= '1' && ch <= '9') {
+			has_digit = true;
+		} else if (ch >= 'A' && ch <= 'Z') {
+			has_upper = true;
+		} else if (ch >= 'a' && ch <= 'z') {
+			has_lower = true;
+		}
+		if (ch < seen.size() && !seen[ch]) {
+			seen[ch] = true;
+			++unique;
+		}
+	}
+	// High confidence: broad charset usage and mixed classes.
+	if (has_digit && has_upper && has_lower && unique >= 12) {
+		return PubkeyConfidence::High;
+	}
+	// Maybe: valid base58 token length for pubkey but weaker diversity.
+	return PubkeyConfidence::Maybe;
+}
+
+bool is_pubkey_candidate(PubkeyConfidence confidence) {
+	return confidence != PubkeyConfidence::None;
+}
+
+bool is_high_confidence_pubkey(PubkeyConfidence confidence) {
+	return confidence == PubkeyConfidence::High;
+}
+
+struct PubkeySpan {
+	size_t start = 0;
+	size_t len = 0;
+	PubkeyConfidence confidence = PubkeyConfidence::None;
+};
+
 void collect_base58_pubkey_spans(
 	const std::vector<uint1> &buf,
-	std::vector<std::pair<size_t, size_t>> &spans)
+	std::vector<PubkeySpan> &spans)
 {
 	spans.clear();
 	size_t i = 0;
@@ -271,21 +307,16 @@ void collect_base58_pubkey_spans(
 		}
 		const size_t len = j - i;
 		if (len >= 32 && len <= 44) {
-			bool has_digit = false;
-			bool has_upper = false;
-			bool has_lower = false;
-			for (size_t k = i; k < j; ++k) {
-				uint1 ch = buf[k];
-				if (ch >= '1' && ch <= '9') {
-					has_digit = true;
-				} else if (ch >= 'A' && ch <= 'Z') {
-					has_upper = true;
-				} else if (ch >= 'a' && ch <= 'z') {
-					has_lower = true;
-				}
-			}
-			if (has_digit && has_upper && has_lower) {
-				spans.emplace_back(i, len);
+			std::vector<uint1> token(
+				buf.begin() + static_cast<ptrdiff_t>(i),
+				buf.begin() + static_cast<ptrdiff_t>(j));
+			const PubkeyConfidence confidence = classify_base58_pubkey(token);
+			if (is_pubkey_candidate(confidence)) {
+				PubkeySpan span;
+				span.start = i;
+				span.len = len;
+				span.confidence = confidence;
+				spans.push_back(span);
 			}
 		}
 		i = j;
@@ -323,17 +354,26 @@ std::string sanitize_component(const std::string &in) {
 	return out;
 }
 
-std::string make_string_flag_name(ut64 ptr, const std::string &text, bool is_pubkey) {
-	if (is_pubkey) {
+std::string make_string_flag_name(ut64 ptr, const std::string &text, PubkeyConfidence confidence) {
+	if (is_pubkey_candidate(confidence)) {
 		const std::string short_id = sanitize_component(text.substr(0, std::min<size_t>(10, text.size())));
-		return "str.sol.pubkey_" + short_id + "_" + hex_u64(ptr);
+		const char *prefix = is_high_confidence_pubkey(confidence)
+			? "str.sol.pubkey_"
+			: "str.sol.maybe_pubkey_";
+		return std::string(prefix) + short_id + "_" + hex_u64(ptr);
 	}
 	const std::string short_text = sanitize_component(text.substr(0, std::min<size_t>(24, text.size())));
 	return "str.sol." + short_text + "_" + hex_u64(ptr);
 }
 
-std::string make_ptr_flag_name(ut64 slot_addr, bool is_pubkey) {
-	return std::string(is_pubkey ? "sym.sol.ptr_pubkey_" : "sym.sol.ptr_str_") + hex_u64(slot_addr);
+std::string make_ptr_flag_name(ut64 slot_addr, PubkeyConfidence confidence) {
+	if (is_high_confidence_pubkey(confidence)) {
+		return "sym.sol.ptr_pubkey_" + hex_u64(slot_addr);
+	}
+	if (is_pubkey_candidate(confidence)) {
+		return "sym.sol.ptr_maybe_pubkey_" + hex_u64(slot_addr);
+	}
+	return "sym.sol.ptr_str_" + hex_u64(slot_addr);
 }
 
 void apply_flag(
@@ -369,9 +409,9 @@ DiscoveredString *register_discovered_string(
 		DiscoveredString d;
 		d.ptr = ptr;
 		d.len = len;
-		d.is_pubkey = looks_like_base58_pubkey(bytes);
+		d.pubkey_confidence = classify_base58_pubkey(bytes);
 		d.text.assign(bytes.begin(), bytes.end());
-		d.string_flag_name = make_string_flag_name(ptr, d.text, d.is_pubkey);
+		d.string_flag_name = make_string_flag_name(ptr, d.text, d.pubkey_confidence);
 		it = by_ptr_len.emplace(key, std::move(d)).first;
 		apply_flag(core, R_FLAGS_FS_STRINGS, it->second.string_flag_name, ptr, static_cast<ut32>(len));
 	}
@@ -389,14 +429,14 @@ void register_embedded_pubkeys(
 	if (bytes.size() < 32) {
 		return;
 	}
-	std::vector<std::pair<size_t, size_t>> spans;
+	std::vector<PubkeySpan> spans;
 	collect_base58_pubkey_spans(bytes, spans);
 	for (const auto &span : spans) {
-		if (span.second < 32 || span.second > 44) {
+		if (span.len < 32 || span.len > 44) {
 			continue;
 		}
-		const size_t start = span.first;
-		const size_t len = span.second;
+		const size_t start = span.start;
+		const size_t len = span.len;
 		std::vector<uint1> token(
 			bytes.begin() + static_cast<ptrdiff_t>(start),
 			bytes.begin() + static_cast<ptrdiff_t>(start + len));
@@ -407,7 +447,7 @@ void register_embedded_pubkeys(
 			base_ptr + static_cast<ut64>(start),
 			static_cast<ut64>(len),
 			token);
-		if (d && d->is_pubkey) {
+		if (d && is_pubkey_candidate(d->pubkey_confidence)) {
 			value_to_symbol.emplace(base_ptr + static_cast<ut64>(start), d->string_flag_name);
 		}
 	}
@@ -444,11 +484,12 @@ void discover_strings_from_ptr_len_tables(
 				continue;
 			}
 			DiscoveredString *d = register_discovered_string(core, by_ptr_len, value_to_symbol, ptr, len, bytes);
-			if (d && !d->is_pubkey) {
+			if (d && !is_pubkey_candidate(d->pubkey_confidence)) {
 				register_embedded_pubkeys(core, by_ptr_len, value_to_symbol, ptr, bytes);
 			}
 			const ut64 slot_addr = table.start + static_cast<ut64>(off);
-			const std::string ptr_name = make_ptr_flag_name(slot_addr, d->is_pubkey);
+			const PubkeyConfidence confidence = d ? d->pubkey_confidence : PubkeyConfidence::None;
+			const std::string ptr_name = make_ptr_flag_name(slot_addr, confidence);
 			apply_flag(core, R_FLAGS_FS_SYMBOLS, ptr_name, slot_addr, 16);
 			value_to_symbol.emplace(slot_addr, ptr_name);
 		}
@@ -476,11 +517,12 @@ void discover_strings_from_ptr_len_tables(
 			}
 			DiscoveredString *d = register_discovered_string(
 				core, by_ptr_len, value_to_symbol, ptr, bytes.size(), bytes);
-			if (d && !d->is_pubkey) {
+			if (d && !is_pubkey_candidate(d->pubkey_confidence)) {
 				register_embedded_pubkeys(core, by_ptr_len, value_to_symbol, ptr, bytes);
 			}
 			const ut64 slot_addr = table.start + static_cast<ut64>(off);
-			const std::string ptr_name = make_ptr_flag_name(slot_addr, d->is_pubkey);
+			const PubkeyConfidence confidence = d ? d->pubkey_confidence : PubkeyConfidence::None;
+			const std::string ptr_name = make_ptr_flag_name(slot_addr, confidence);
 			apply_flag(core, R_FLAGS_FS_SYMBOLS, ptr_name, slot_addr, 8);
 			value_to_symbol.emplace(slot_addr, ptr_name);
 		}
@@ -537,7 +579,7 @@ void discover_strings_from_ptr_len_tables(
 				core, by_ptr_len, value_to_symbol, ptr, static_cast<ut64>(len), text);
 			if (d) {
 				value_to_symbol.emplace(ptr, d->string_flag_name);
-				if (!d->is_pubkey) {
+				if (!is_pubkey_candidate(d->pubkey_confidence)) {
 					register_embedded_pubkeys(core, by_ptr_len, value_to_symbol, ptr, text);
 				}
 			}
