@@ -49,6 +49,32 @@ python3 get-rlibs-from-crate.py \
   --versions-file versions/anchor-lang.txt
 ```
 
+### Batch build from generated index
+
+Use the generated `versions/*.txt` index to build many crates with resume support:
+
+```bash
+bash build-rlibs-from-index.sh \
+  --solana-version 1.18.16 \
+  --compiler-solana-version 1.18.16 \
+  --fallback-compiler-solana-version 1.18.16 \
+  --platform-tools-version v1.48 \
+  --scope all
+```
+
+Useful filters:
+
+```bash
+# only anchor-lang
+bash build-rlibs-from-index.sh ... --scope anchor --include '^anchor-lang$'
+
+# first 20 crates (smoke run)
+bash build-rlibs-from-index.sh ... --scope all --max-crates 20
+```
+
+The batch script records per-crate state in `run-state/` and treats partial results
+(`X/Y versions produced rlibs`) as resumable progress.
+
 This command automatically downloads the specified solana version into the `solana/` directory, fetches and builds all versions of the `anchor-lang` crate listed in the `versions/anchor-lang.txt` file. After that, for each version the resulted .rlib file is extracted and saved in the `rlibs/<crate-name>/` directory.
 
 **If the `solana-program` crate is specified, the equal solana version will be used for each crate version**
