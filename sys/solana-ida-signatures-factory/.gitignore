@@ -1,0 +1,10 @@
+crates/*
+solana/*
+rlibs/*
+sigs/*
+__pycache__
+versions/__pycache__
+.env
+venv
+*.swp
+.DS_Store

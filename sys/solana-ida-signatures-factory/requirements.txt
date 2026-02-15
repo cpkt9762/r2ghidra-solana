@@ -1,0 +1,6 @@
+pyelftools
+cxxfilt
+crcmod
+ar
+rust_demangler
+packaging

@@ -78,7 +78,8 @@ normalize_spec() {
 
 OUT_DB=""
 WORK_DIR="${TMPDIR:-/tmp}/r2ghidra-sbpf-zigns"
-FACTORY_DIR="${HOME}/Documents/jup/solana-ida-signatures-factory"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FACTORY_DIR="${SCRIPT_DIR}/solana-ida-signatures-factory"
 SOLANA_VERSION="1.18.26"
 SBPF_TARGET="sbpfv3-solana-solana"
 RUSTLIB_DIR=""
