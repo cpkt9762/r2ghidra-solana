@@ -1080,9 +1080,58 @@ static const ExternFunctionSpec *lookup_sbpf_manual_function_spec(const char *na
 		{ "sol_deserialize", "uint64_t", false, kArgsSolDeserialize, sizeof(kArgsSolDeserialize) / sizeof(kArgsSolDeserialize[0]) }
 	};
 
+	auto is_prefixed_exact = [](const char *candidate, const char *prefix, const char *target) {
+		if (!candidate || !prefix || !target) {
+			return false;
+		}
+		const size_t plen = strlen(prefix);
+		if (strncmp(candidate, prefix, plen) != 0) {
+			return false;
+		}
+		return !strcmp(candidate + plen, target);
+	};
+	auto is_entry_alias = [&](const char *candidate) {
+		if (!candidate || !*candidate) {
+			return false;
+		}
+		if (!strcmp(candidate, "entry0")) {
+			return true;
+		}
+		if (!strncmp(candidate, "entry", 5)) {
+			const char *p = candidate + 5;
+			if (!*p) {
+				return true;
+			}
+			while (*p) {
+				if (*p < '0' || *p > '9') {
+					return false;
+				}
+				++p;
+			}
+			return true;
+		}
+		return false;
+	};
+
 	for (const auto &spec : kSpecs) {
 		if (!strcmp (spec.name, name)) {
 			return &spec;
+		}
+		if (is_prefixed_exact(name, "sym.", spec.name)
+				|| is_prefixed_exact(name, "sym.imp.", spec.name)) {
+			return &spec;
+		}
+		if (!strcmp(spec.name, "entrypoint") || !strcmp(spec.name, "entry")) {
+			if (is_entry_alias(name)
+					|| is_prefixed_exact(name, "sym.", "entry0")
+					|| is_prefixed_exact(name, "sym.", "entry1")) {
+				return &spec;
+			}
+		}
+		if (!strcmp(spec.name, "process_instruction")) {
+			if (strstr(name, "process_instruction")) {
+				return &spec;
+			}
 		}
 	}
 	return nullptr;
