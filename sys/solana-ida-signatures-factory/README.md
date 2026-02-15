@@ -18,6 +18,23 @@ For the `anchor-lang` crate:
 python3 versions/fetch-crate-versions.py anchor-lang > versions/anchor-lang.txt
 ```
 
+### Refresh full Solana + Anchor version index (official sources)
+
+Generate a complete index from:
+- GitHub releases: `anza-xyz/agave` + `solana-labs/solana`
+- crates.io metadata for Solana/Anchor crates
+
+```bash
+bash versions/refresh-solana-anchor-index.sh
+```
+
+Outputs include:
+- `versions/solana-release-tags.txt`
+- `versions/solana-rust-crates.txt`
+- `versions/anchor-crates.txt`
+- `versions/missing-crates.txt` (not found on crates.io)
+- `versions/<crate>.txt` for each discovered crate
+
 ### Build all crate versions using a specific solana version and extract rlibs
 
 For the `anchor-lang` crate and solana version `1.18.26`:

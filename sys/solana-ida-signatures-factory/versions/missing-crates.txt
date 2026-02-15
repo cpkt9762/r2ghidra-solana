@@ -1,0 +1,3 @@
+solana-svm-test-harness
+solana-svm-test-harness-fixture
+solana-svm-test-harness-instr
