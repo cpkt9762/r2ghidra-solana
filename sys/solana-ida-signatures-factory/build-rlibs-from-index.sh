@@ -193,6 +193,7 @@ ok=0
 fail=0
 skip=0
 partial=0
+no_rlib=0
 idx=0
 
 while IFS= read -r crate; do
@@ -244,10 +245,18 @@ while IFS= read -r crate; do
 		if [ -n "$done_ok" ] && [ -n "$done_total" ] && [ "$done_ok" -gt 0 ] 2>/dev/null; then
 			partial=$((partial + 1))
 			rm -f "$STATE_DIR/failed/$crate.fail"
+			rm -f "$STATE_DIR/failed/$crate.norlib"
 			printf 'partial %s/%s\n' "$done_ok" "$done_total" > "$STATE_DIR/failed/$crate.partial"
 			printf 'partial %s/%s\n' "$done_ok" "$done_total" > "$STATE_DIR/success/$crate.ok"
 			echo "partial=$crate built=$done_ok total=$done_total log=$log_file" >> "$RUN_SUMMARY"
 			warn "[$idx/$total] partial $crate: $done_ok/$done_total versions (see $log_file)"
+		elif grep -Eq 'Rlib for .+ not found at ' "$log_file"; then
+			no_rlib=$((no_rlib + 1))
+			rm -f "$STATE_DIR/failed/$crate.fail" "$STATE_DIR/failed/$crate.partial"
+			printf 'no_rlib\n' > "$STATE_DIR/failed/$crate.norlib"
+			printf 'no_rlib\n' > "$STATE_DIR/success/$crate.ok"
+			echo "no_rlib=$crate log=$log_file" >> "$RUN_SUMMARY"
+			warn "[$idx/$total] no_rlib $crate (likely proc-macro/host-only, see $log_file)"
 		else
 			fail=$((fail + 1))
 			rm -f "$STATE_DIR/success/$crate.ok"
@@ -258,10 +267,11 @@ while IFS= read -r crate; do
 	fi
 done < "$tmp_crates"
 
-log "Done: ok=${ok} partial=${partial} fail=${fail} skip=${skip}"
+log "Done: ok=${ok} partial=${partial} no_rlib=${no_rlib} fail=${fail} skip=${skip}"
 log "Summary: $RUN_SUMMARY"
 echo "ok=${ok}" >> "$RUN_SUMMARY"
 echo "partial=${partial}" >> "$RUN_SUMMARY"
+echo "no_rlib=${no_rlib}" >> "$RUN_SUMMARY"
 echo "fail=${fail}" >> "$RUN_SUMMARY"
 echo "skip=${skip}" >> "$RUN_SUMMARY"
 
