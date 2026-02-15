@@ -102,7 +102,8 @@ bool contains_text_section_name(const std::string &name, const char *needle) {
 void collect_section_ranges(
 	RCore *core,
 	std::vector<AddressRange> &rodata_ranges,
-	std::vector<AddressRange> &table_ranges)
+	std::vector<AddressRange> &table_ranges,
+	std::vector<AddressRange> *text_ranges)
 {
 	const RList *sections = r_bin_get_sections(core->bin);
 	if (!sections) {
@@ -121,14 +122,20 @@ void collect_section_ranges(
 			continue;
 		}
 		std::string name = sec->name;
-		if (contains_text_section_name(name, "rodata")) {
+		const bool is_rodata = contains_text_section_name(name, "rodata");
+		if (is_rodata) {
 			rodata_ranges.push_back({ start, size, name });
+			// Rust and C const pointer tables can be emitted into rodata.
+			table_ranges.push_back({ start, size, name });
 		}
 		if (contains_text_section_name(name, ".data.rel.ro")
 				|| name == ".data"
 				|| contains_text_section_name(name, ".data.rel.ro.")
 				|| contains_text_section_name(name, ".data.rel")) {
 			table_ranges.push_back({ start, size, name });
+		}
+		if (text_ranges && (name == ".text" || contains_text_section_name(name, "text"))) {
+			text_ranges->push_back({ start, size, name });
 		}
 	}
 }
@@ -435,7 +442,12 @@ void SolanaGlobalPtrStringAnalyzer::run(Funcdata *func, R2Architecture *arch) {
 		}
 		std::vector<AddressRange> rodata_ranges;
 		std::vector<AddressRange> table_ranges;
-		collect_section_ranges(core, rodata_ranges, table_ranges);
+		std::vector<AddressRange> text_ranges;
+		collect_section_ranges(core, rodata_ranges, table_ranges, &text_ranges);
+		if (rodata_ranges.empty() && !text_ranges.empty()) {
+			// sBPF v0 commonly keeps rodata in .text; use it as conservative fallback.
+			rodata_ranges = text_ranges;
+		}
 		if (!rodata_ranges.empty() && !table_ranges.empty()) {
 			discover_strings_from_ptr_len_tables(core, rodata_ranges, table_ranges, value_to_symbol);
 		}
