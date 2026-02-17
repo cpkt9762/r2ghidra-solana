@@ -325,33 +325,66 @@ def run_crate_build(
     with log_file.open("w", encoding="utf-8") as lf:
         lf.write("$ " + " ".join(cmd) + "\n")
         lf.flush()
-        proc = subprocess.Popen(cmd, cwd=str(factory_dir), stdout=lf, stderr=subprocess.STDOUT)
+
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(factory_dir),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        captured: list[str] = []
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            captured.append(line)
+            lf.write(line)
+            lf.flush()
+            if args.stream:
+                # Stream child output to the main terminal in real time.
+                sys.stdout.write(line)
+                sys.stdout.flush()
+        proc.stdout.close()
         rc = proc.wait()
 
     if tmp_versions_file and tmp_versions_file.exists():
         tmp_versions_file.unlink()
 
-    text = log_file.read_text(encoding="utf-8", errors="ignore")
+    text = "".join(captured) if not args.stream else log_file.read_text(encoding="utf-8", errors="ignore")
     return (rc, text)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Build latest Solana/Anchor crate rlibs (default: Solana 1.18.16 latest-per-crate)."
+        description="Build Solana/Anchor crate rlibs (default: Solana 1.18.16, all versions per crate)."
     )
     parser.add_argument("--solana-version", default="1.18.16")
     parser.add_argument("--compiler-solana-version", default="1.18.16")
     parser.add_argument("--fallback-compiler-solana-version", default="1.18.16")
     parser.add_argument("--platform-tools-version", default="v1.48")
     parser.add_argument("--scope", choices=("solana", "anchor", "all"), default="solana")
-    parser.add_argument("--latest-only", action="store_true", default=True)
-    parser.add_argument("--all-versions", action="store_true", help="Build all non-yanked versions per crate")
+    parser.add_argument(
+        "--latest-only",
+        action="store_true",
+        default=False,
+        help="Build only latest non-yanked version per crate (default: build all versions)",
+    )
+    parser.add_argument(
+        "--all-versions",
+        action="store_true",
+        help="Build all non-yanked versions per crate (default behavior)",
+    )
     parser.add_argument("--include", help="Only process crates matching regex")
     parser.add_argument("--exclude", help="Skip crates matching regex")
     parser.add_argument("--max-crates", type=int, default=0)
     parser.add_argument("--force", action="store_true", help="Re-run crates already marked success/partial/no_rlib")
     parser.add_argument("--cleanup-target", action="store_true")
     parser.add_argument("--cleanup-solana", action="store_true")
+    parser.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="Do not mirror child build output to main terminal (still written to per-crate logs)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--factory-dir", default=str(pathlib.Path(__file__).resolve().parent))
     parser.add_argument("--versions-dir", default="")
@@ -360,6 +393,7 @@ def main() -> int:
 
     if args.all_versions:
         args.latest_only = False
+    args.stream = not args.no_stream
 
     factory_dir = pathlib.Path(args.factory_dir).resolve()
     versions_dir = pathlib.Path(args.versions_dir).resolve() if args.versions_dir else (factory_dir / "versions")
