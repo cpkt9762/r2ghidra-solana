@@ -63,12 +63,28 @@ dependencies = [
 """
 
 
+def with_cargo_bin_in_path(env=None):
+    merged = dict(os.environ if env is None else env)
+    cargo_bin = pathlib.Path.home() / ".cargo" / "bin"
+    if cargo_bin.is_dir():
+        cargo_bin_str = str(cargo_bin)
+        current_path = merged.get("PATH", "")
+        paths = current_path.split(os.pathsep) if current_path else []
+        if cargo_bin_str not in paths:
+            merged["PATH"] = (
+                f"{cargo_bin_str}{os.pathsep}{current_path}" if current_path else cargo_bin_str
+            )
+    return merged
+
+
 def run_cmd(args, cwd=None, env=None, stream=False):
+    run_env = with_cargo_bin_in_path(env)
+
     if not stream:
         proc = subprocess.run(
             args,
             cwd=cwd,
-            env=env,
+            env=run_env,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -78,7 +94,7 @@ def run_cmd(args, cwd=None, env=None, stream=False):
     proc = subprocess.Popen(
         args,
         cwd=cwd,
-        env=env,
+        env=run_env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -101,7 +117,8 @@ def ensure_solana_cache_dir():
 
 
 def ensure_host_rust_toolchain():
-    missing = [tool for tool in ("cargo", "rustc") if shutil.which(tool) is None]
+    tool_path = with_cargo_bin_in_path().get("PATH", "")
+    missing = [tool for tool in ("cargo", "rustc") if shutil.which(tool, path=tool_path) is None]
     if not missing:
         return True
     print(

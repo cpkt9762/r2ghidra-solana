@@ -1,4 +1,5 @@
 import argparse
+import os
 import pathlib
 import shutil
 import subprocess
@@ -74,8 +75,21 @@ def run_cleanup_solana(version: str):
     )
 
 
+def with_cargo_bin_in_path():
+    cargo_bin = pathlib.Path.home() / ".cargo" / "bin"
+    current_path = os.environ.get("PATH", "")
+    if not cargo_bin.is_dir():
+        return current_path
+    cargo_bin_str = str(cargo_bin)
+    paths = current_path.split(os.pathsep) if current_path else []
+    if cargo_bin_str in paths:
+        return current_path
+    return f"{cargo_bin_str}{os.pathsep}{current_path}" if current_path else cargo_bin_str
+
+
 def preflight_host_rust_toolchain():
-    missing = [tool for tool in ("cargo", "rustc") if shutil.which(tool) is None]
+    tool_path = with_cargo_bin_in_path()
+    missing = [tool for tool in ("cargo", "rustc") if shutil.which(tool, path=tool_path) is None]
     if not missing:
         return True
     print(
