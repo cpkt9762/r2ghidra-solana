@@ -76,6 +76,32 @@ The batch script records per-crate state in `run-state/` and treats partial resu
 (`X/Y versions produced rlibs`) as resumable progress. Crates that build but never
 emit target `.rlib` are marked `no_rlib` and skipped in subsequent runs.
 
+### Python batch builder (recommended for servers)
+
+Build Solana `1.18.16` latest versions for all Solana crates (default behavior):
+
+```bash
+python3 build-rlibs-latest.py
+```
+
+Common options:
+
+```bash
+# Build all versions per crate (slow)
+python3 build-rlibs-latest.py --all-versions
+
+# Anchor only
+python3 build-rlibs-latest.py --scope anchor
+
+# Filter crates
+python3 build-rlibs-latest.py --include '^solana-(account|program)$'
+```
+
+State and logs:
+- `run-state/latest-build-state.json`
+- `run-state/run-latest-*.summary`
+- `run-state/logs-latest/*.log`
+
 This command automatically downloads the specified solana version into the `solana/` directory, fetches and builds all versions of the `anchor-lang` crate listed in the `versions/anchor-lang.txt` file. After that, for each version the resulted .rlib file is extracted and saved in the `rlibs/<crate-name>/` directory.
 
 **If the `solana-program` crate is specified, the equal solana version will be used for each crate version**
