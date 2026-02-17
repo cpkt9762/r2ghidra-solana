@@ -2,6 +2,7 @@ import argparse
 import os
 import pathlib
 import subprocess
+import sys
 from typing import Optional
 
 try:
@@ -61,16 +62,35 @@ dependencies = [
 """
 
 
-def run_cmd(args, cwd=None, env=None):
-    proc = subprocess.run(
+def run_cmd(args, cwd=None, env=None, stream=False):
+    if not stream:
+        proc = subprocess.run(
+            args,
+            cwd=cwd,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        return proc.returncode, proc.stdout
+
+    proc = subprocess.Popen(
         args,
         cwd=cwd,
         env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        bufsize=1,
     )
-    return proc.returncode, proc.stdout
+    captured = []
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        captured.append(line)
+        sys.stdout.write(line)
+        sys.stdout.flush()
+    proc.stdout.close()
+    return proc.wait(), "".join(captured)
 
 
 def ensure_solana_release(solana_version: str):
@@ -78,9 +98,7 @@ def ensure_solana_release(solana_version: str):
     if solana_dir.exists():
         return True
     print(f"{Fore.BLUE}Solana version {solana_version} not found, installing...{Style.RESET_ALL}")
-    code, out = run_cmd(["bash", str(ROOT_DIR / "install-solana.sh"), solana_version], cwd=ROOT_DIR)
-    if out:
-        print(out)
+    code, _out = run_cmd(["bash", str(ROOT_DIR / "install-solana.sh"), solana_version], cwd=ROOT_DIR, stream=True)
     return code == 0 and solana_dir.exists()
 
 
@@ -89,9 +107,7 @@ def ensure_crate(crate: str, version: str):
     if crate_dir.exists():
         return True
     print(f"{Fore.BLUE}Crate {crate} version {version} not found, fetching...{Style.RESET_ALL}")
-    code, out = run_cmd(["bash", str(ROOT_DIR / "fetch-crate.sh"), crate, version], cwd=ROOT_DIR)
-    if out:
-        print(out)
+    code, _out = run_cmd(["bash", str(ROOT_DIR / "fetch-crate.sh"), crate, version], cwd=ROOT_DIR, stream=True)
     return code == 0 and crate_dir.exists()
 
 
@@ -156,7 +172,7 @@ def run_build(crate_dir: pathlib.Path, cargo_build_sbf: pathlib.Path, tools_vers
     cmd = [str(cargo_build_sbf)]
     if tools_version:
         cmd.extend(["--tools-version", tools_version])
-    return run_cmd(cmd, cwd=crate_dir, env=rustc_env)
+    return run_cmd(cmd, cwd=crate_dir, env=rustc_env, stream=True)
 
 
 def build_crate(crate: str, version: str, solana_version: str, only_rlib=True, tools_version: Optional[str] = None):
@@ -184,7 +200,6 @@ def build_crate(crate: str, version: str, solana_version: str, only_rlib=True, t
     for _attempt in range(1, 6):
         code, status = run_build(crate_dir, cargo_build_sbf, tools_version=tools_version)
         last_status = status
-        print(status)
         if code == 0:
             print(f"{Fore.GREEN}Crate {crate} version {version} built successfully!{Style.RESET_ALL}")
             return True, status
