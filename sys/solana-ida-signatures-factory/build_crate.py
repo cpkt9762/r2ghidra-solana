@@ -1,6 +1,7 @@
 import argparse
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 from typing import Optional
@@ -93,6 +94,24 @@ def run_cmd(args, cwd=None, env=None, stream=False):
     return proc.wait(), "".join(captured)
 
 
+def ensure_solana_cache_dir():
+    cache_dir = pathlib.Path.home() / ".cache" / "solana"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def ensure_host_rust_toolchain():
+    missing = [tool for tool in ("cargo", "rustc") if shutil.which(tool) is None]
+    if not missing:
+        return True
+    print(
+        f"{Fore.RED}Missing host tools: {', '.join(missing)}. "
+        "Install them first (e.g. apt: cargo rustc)."
+        f"{Style.RESET_ALL}"
+    )
+    return False
+
+
 def ensure_solana_release(solana_version: str):
     solana_dir = SOLANA_DIR / f"solana-release-{solana_version}"
     if solana_dir.exists():
@@ -177,6 +196,10 @@ def run_build(crate_dir: pathlib.Path, cargo_build_sbf: pathlib.Path, tools_vers
 
 def build_crate(crate: str, version: str, solana_version: str, only_rlib=True, tools_version: Optional[str] = None):
     del only_rlib
+    if not ensure_host_rust_toolchain():
+        return False, "missing host rust toolchain (cargo/rustc)"
+    ensure_solana_cache_dir()
+
     if not ensure_solana_release(solana_version):
         print(f"{Fore.RED}Failed to install solana version {solana_version}{Style.RESET_ALL}")
         return False, ""

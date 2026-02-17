@@ -74,6 +74,18 @@ def run_cleanup_solana(version: str):
     )
 
 
+def preflight_host_rust_toolchain():
+    missing = [tool for tool in ("cargo", "rustc") if shutil.which(tool) is None]
+    if not missing:
+        return True
+    print(
+        f"{Fore.RED}Missing host tools: {', '.join(missing)}. "
+        "Please install rust toolchain first (apt: cargo rustc)."
+        f"{Style.RESET_ALL}"
+    )
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -107,6 +119,9 @@ def main():
     parser.add_argument("--versions-file", help="The file containing versions to build")
     parser.add_argument("--version", help="Single crate version to build")
     args = parser.parse_args()
+
+    if not preflight_host_rust_toolchain():
+        raise SystemExit(2)
 
     versions = parse_versions(args)
     crate = args.crate
