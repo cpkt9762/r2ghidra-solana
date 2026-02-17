@@ -33,7 +33,7 @@ DEFAULT_RETRIES = 6
 
 
 def now_iso() -> str:
-    return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def log(msg: str) -> None:
@@ -366,7 +366,7 @@ def main() -> int:
     state_dir = pathlib.Path(args.state_dir).resolve() if args.state_dir else (factory_dir / "run-state")
     logs_dir = state_dir / "logs-latest"
     state_file = state_dir / "latest-build-state.json"
-    summary_file = state_dir / f"run-latest-{dt.datetime.now(dt.UTC).strftime('%Y%m%d-%H%M%S')}.summary"
+    summary_file = state_dir / f"run-latest-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S')}.summary"
 
     versions_dir.mkdir(parents=True, exist_ok=True)
     state_dir.mkdir(parents=True, exist_ok=True)
