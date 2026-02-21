@@ -20,7 +20,7 @@ Options:
   --platform-tools-version <v>
                                Platform-tools version passed to cargo-build-sbf --tools-version (required with fetch)
   --sbpf-target <triple>       Rust sbpf target for rustlib scan
-                               (default: sbpfv3-solana-solana)
+                               (default: sbf-solana-solana)
   --rustlib-dir <path>         Override rustlib directory
                                (example: ~/.cache/solana/v1.48/platform-tools/rust/lib/rustlib/sbpfv3-solana-solana/lib)
   --crate <name:version>       Crate + version to fetch via factory (repeatable)
@@ -174,7 +174,7 @@ SOLANA_VERSION=""
 COMPILER_SOLANA_VERSION=""
 FALLBACK_COMPILER_SOLANA_VERSION=""
 PLATFORM_TOOLS_VERSION=""
-SBPF_TARGET="sbpfv3-solana-solana"
+SBPF_TARGET="sbf-solana-solana"
 RUSTLIB_DIR=""
 FETCH_CRATES=1
 USE_RUST_CORE=1
@@ -404,6 +404,27 @@ detect_rustlib_dir() {
 	local target="$1"
 	local candidates=()
 	local c
+
+	# 1) If --platform-tools-version is set, try exact match first
+	if [ -n "$PLATFORM_TOOLS_VERSION" ]; then
+		local exact_dir="$HOME/.cache/solana/${PLATFORM_TOOLS_VERSION}/platform-tools/rust/lib/rustlib/${target}/lib"
+		if [ -d "$exact_dir" ]; then
+			printf '%s\n' "$exact_dir"
+			return
+		fi
+		# sbf-solana-solana fallback for exact version
+		if [ "$target" = "sbpfv3-solana-solana" ]; then
+			exact_dir="$HOME/.cache/solana/${PLATFORM_TOOLS_VERSION}/platform-tools/rust/lib/rustlib/sbf-solana-solana/lib"
+			if [ -d "$exact_dir" ]; then
+				warn "Using sbf-solana-solana rustlib (sbpfv3 not found for tools ${PLATFORM_TOOLS_VERSION})"
+				printf '%s\n' "$exact_dir"
+				return
+			fi
+		fi
+		warn "No rustlib found for tools version ${PLATFORM_TOOLS_VERSION}, falling back to global search"
+	fi
+
+	# 2) Global search fallback (pick latest by sort -V)
 	while IFS= read -r c; do
 		candidates+=("$c")
 	done < <(find "$HOME/.cache/solana" -type d -path "*/platform-tools/rust/lib/rustlib/${target}/lib" 2>/dev/null | sort -V)
@@ -419,6 +440,16 @@ detect_rustlib_dir() {
 	fi
 	printf '%s\n' "${candidates[$((${#candidates[@]} - 1))]}"
 }
+
+if [ "$USE_RUST_CORE" -eq 1 ] && [ -z "$RUSTLIB_DIR" ] && [ "$FETCH_CRATES" -eq 0 ] && [ -n "$PLATFORM_TOOLS_VERSION" ]; then
+	expected_cache="$HOME/.cache/solana/${PLATFORM_TOOLS_VERSION}/platform-tools"
+	if [ ! -d "$expected_cache" ]; then
+		die "platform-tools ${PLATFORM_TOOLS_VERSION} not cached at ${expected_cache}.
+  With --skip-fetch, cargo-build-sbf never runs, so platform-tools are not auto-downloaded.
+  Fix: either run 'cargo-build-sbf --tools-version ${PLATFORM_TOOLS_VERSION}' once to populate the cache,
+       or pass --rustlib-dir explicitly, or remove --skip-fetch."
+	fi
+fi
 
 if [ "$USE_RUST_CORE" -eq 1 ]; then
 	if [ -z "$RUSTLIB_DIR" ]; then

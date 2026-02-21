@@ -31,6 +31,110 @@ ANCHOR_CARGO_URL = "https://raw.githubusercontent.com/coral-xyz/anchor/master/Ca
 DEFAULT_TIMEOUT = 45
 DEFAULT_RETRIES = 6
 
+# Static whitelist of crates known to appear in on-chain SBF program builds.
+# Used by scope=solana (default).  For dynamic discovery use scope=solana-all.
+# Third-party Rust libs (borsh, serde, etc.) are captured via deps/ extraction
+# in get-rlibs-from-crate.py --extract-deps, so they don't need to be listed here.
+SBF_PROGRAM_CRATES: frozenset[str] = frozenset({
+    # --- CORE: solana-program and its transitive micro-crates (2.x era) ---
+    "solana-program",
+    "solana-account",
+    "solana-account-info",
+    "solana-address",
+    "solana-atomic-u64",
+    "solana-big-mod-exp",
+    "solana-bincode",
+    "solana-blake3-hasher",
+    "solana-borsh",
+    "solana-clock",
+    "solana-cpi",
+    "solana-decode-error",
+    "solana-define-syscall",
+    "solana-epoch-rewards",
+    "solana-epoch-schedule",
+    "solana-fee-calculator",
+    "solana-frozen-abi",
+    "solana-frozen-abi-macro",
+    "solana-hash",
+    "solana-instruction",
+    "solana-instruction-error",
+    "solana-instructions-sysvar",
+    "solana-keccak-hasher",
+    "solana-last-restart-slot",
+    "solana-msg",
+    "solana-native-token",
+    "solana-nonce",
+    "solana-precompile-error",
+    "solana-program-entrypoint",
+    "solana-program-error",
+    "solana-program-memory",
+    "solana-program-option",
+    "solana-program-pack",
+    "solana-pubkey",
+    "solana-rent",
+    "solana-sanitize",
+    "solana-sdk-ids",
+    "solana-secp256k1-recover",
+    "solana-serde-varint",
+    "solana-serialize-utils",
+    "solana-sha256-hasher",
+    "solana-short-vec",
+    "solana-slot-hashes",
+    "solana-slot-history",
+    "solana-stable-layout",
+    "solana-sysvar",
+    "solana-sysvar-id",
+    # --- COMMON: frequently imported by programs ---
+    "solana-address-lookup-table-interface",
+    "solana-compute-budget-interface",
+    "solana-config-interface",
+    "solana-feature-gate-interface",
+    "solana-loader-v2-interface",
+    "solana-loader-v3-interface",
+    "solana-loader-v4-interface",
+    "solana-stake-interface",
+    "solana-system-interface",
+    "solana-vote-interface",
+    "solana-security-txt",
+    # --- CRYPTO: syscall wrappers ---
+    "solana-bn254",
+    "solana-curve25519",
+    "solana-poseidon",
+    "solana-ed25519-program",
+    "solana-secp256k1-program",
+    "solana-secp256r1-program",
+    "solana-zk-sdk",
+    "solana-zk-token-sdk",
+    # --- SPL: programs and utility libs ---
+    "spl-token",
+    "spl-token-2022",
+    "spl-associated-token-account",
+    "spl-memo",
+    "spl-pod",
+    "spl-type-length-value",
+    "spl-discriminator",
+    "spl-tlv-account-resolution",
+    "spl-transfer-hook-interface",
+    "spl-token-metadata-interface",
+    "spl-token-interface",
+    "spl-token-2022-interface",
+    "spl-associated-token-account-interface",
+    "spl-program-error",
+    "spl-elgamal-registry-interface",
+    "spl-memo-interface",
+    "spl-token-confidential-transfer-ciphertext-arithmetic",
+    "spl-token-confidential-transfer-proof-extraction",
+    "spl-token-confidential-transfer-proof-generation",
+    "spl-token-group-interface",
+    # --- THIRD-PARTY LIBS (proven to build standalone with cargo-build-sbf) ---
+    "arrayref",
+    "bincode",
+    "borsh",
+    "bytemuck",
+    "num-traits",
+    "thiserror",
+})
+
 
 def now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -197,7 +301,12 @@ def version_sort_key(ver: str) -> tuple[tuple[int, ...], tuple[int, tuple[Any, .
 
 def resolve_crates(scope: str, versions_dir: pathlib.Path) -> list[str]:
     crates: set[str] = set()
-    if scope in ("solana", "all"):
+    if scope == "solana":
+        # Static whitelist — no network fetch, stable and controllable.
+        crates.update(SBF_PROGRAM_CRATES)
+        log(f"Using static whitelist: {len(SBF_PROGRAM_CRATES)} crates")
+    elif scope in ("solana-all", "all"):
+        # Dynamic discovery from GitHub — may find new crates but is less stable.
         try:
             solana_crates = fetch_solana_crate_list()
             (versions_dir / "solana-rust-crates.txt").write_text("\n".join(solana_crates) + "\n", encoding="utf-8")
@@ -264,7 +373,7 @@ def classify_result(log_text: str, rc: int) -> tuple[str, int, int]:
     if rc == 0:
         if done_match:
             built, total = map(int, done_match[-1])
-            if built == 0 and "Rlib for" in log_text and "not found at" in log_text:
+            if built == 0 and "Rlib for" in log_text and "not found" in log_text:
                 return ("no_rlib", built, total)
             return ("ok", built, total)
         return ("ok", 0, 0)
@@ -273,7 +382,7 @@ def classify_result(log_text: str, rc: int) -> tuple[str, int, int]:
         built, total = map(int, done_match[-1])
         if built > 0:
             return ("partial", built, total)
-    if "Rlib for" in log_text and "not found at" in log_text:
+    if "Rlib for" in log_text and "not found" in log_text:
         return ("no_rlib", 0, 0)
     return ("failed", 0, 0)
 
@@ -315,6 +424,7 @@ def run_crate_build(
         cmd.append("--cleanup-target")
     if args.cleanup_solana:
         cmd.append("--cleanup-solana")
+    cmd.append("--extract-deps")
 
     if args.dry_run:
         if tmp_versions_file and tmp_versions_file.exists():
@@ -362,7 +472,7 @@ def main() -> int:
     parser.add_argument("--compiler-solana-version", default="1.18.16")
     parser.add_argument("--fallback-compiler-solana-version", default="1.18.16")
     parser.add_argument("--platform-tools-version", default="v1.48")
-    parser.add_argument("--scope", choices=("solana", "anchor", "all"), default="solana")
+    parser.add_argument("--scope", choices=("solana", "solana-all", "anchor", "all"), default="solana")
     parser.add_argument(
         "--latest-only",
         action="store_true",
@@ -446,8 +556,9 @@ def main() -> int:
 
     for i, crate in enumerate(crates, start=1):
         existing = state["crates"].get(crate, {})
-        if not args.force and existing.get("status") in {"ok", "partial", "no_rlib"}:
-            log(f"[{i}/{len(crates)}] skip {crate}: already {existing.get('status')}")
+        prev_status = existing.get("status")
+        if not args.force and prev_status in {"ok", "partial", "no_rlib", "failed"}:
+            log(f"[{i}/{len(crates)}] skip {crate}: already {prev_status}")
             skip += 1
             continue
 

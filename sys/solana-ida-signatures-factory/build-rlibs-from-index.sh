@@ -250,7 +250,7 @@ while IFS= read -r crate; do
 			printf 'partial %s/%s\n' "$done_ok" "$done_total" > "$STATE_DIR/success/$crate.ok"
 			echo "partial=$crate built=$done_ok total=$done_total log=$log_file" >> "$RUN_SUMMARY"
 			warn "[$idx/$total] partial $crate: $done_ok/$done_total versions (see $log_file)"
-		elif grep -Eq 'Rlib for .+ not found at ' "$log_file"; then
+		elif grep -Eq 'Rlib for .+ not found' "$log_file"; then
 			no_rlib=$((no_rlib + 1))
 			rm -f "$STATE_DIR/failed/$crate.fail" "$STATE_DIR/failed/$crate.partial"
 			printf 'no_rlib\n' > "$STATE_DIR/failed/$crate.norlib"

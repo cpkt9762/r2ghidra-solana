@@ -1,0 +1,13 @@
+[package]
+name = "hello_world_syscalls"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+solana-program = { version = "=1.18.26", default-features = false }
+
+[profile.release]
+panic = "abort"

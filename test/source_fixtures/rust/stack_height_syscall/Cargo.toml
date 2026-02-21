@@ -1,0 +1,14 @@
+[package]
+name = "rust_stack_height_syscall"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+solana-program = { version = "=1.18.26", default-features = false }
+blake3 = { version = "=1.5.5", default-features = false, features = ["traits-preview"] }
+
+[profile.release]
+panic = "abort"

@@ -8,8 +8,8 @@ OUT_DIR="${1:-/tmp/r2ghidra-solana-rlibs-by-version}"
 CACHE_SOLANA_DIR="${HOME}/.cache/solana"
 
 mkdir -p "$OUT_DIR"
-rm -rf "$OUT_DIR/toolchain-core" "$OUT_DIR/solana-program" "$OUT_DIR/factory-rlibs"
-mkdir -p "$OUT_DIR/toolchain-core" "$OUT_DIR/solana-program" "$OUT_DIR/factory-rlibs"
+rm -rf "$OUT_DIR/toolchain-core" "$OUT_DIR/crate-builds" "$OUT_DIR/factory-rlibs"
+mkdir -p "$OUT_DIR/toolchain-core" "$OUT_DIR/crate-builds" "$OUT_DIR/factory-rlibs"
 
 echo "[*] Collecting rust core/std rlibs from $CACHE_SOLANA_DIR"
 if [ -d "$CACHE_SOLANA_DIR" ]; then
@@ -20,9 +20,7 @@ if [ -d "$CACHE_SOLANA_DIR" ]; then
 			target="$(echo "$libdir" | sed -E 's#^.*/rustlib/([^/]+)/lib$#\1#')"
 			dst="$OUT_DIR/toolchain-core/$solana_ver/$target"
 			mkdir -p "$dst"
-			for n in core alloc compiler_builtins std; do
-				find "$libdir" -maxdepth 1 -type f -name "lib${n}-*.rlib" -exec cp -f {} "$dst/" \;
-			done
+			find "$libdir" -maxdepth 1 -type f -name 'lib*.rlib' -exec cp -f {} "$dst/" \;
 			;;
 		esac
 	done < <(find "$CACHE_SOLANA_DIR" -type d -path '*/platform-tools/rust/lib/rustlib/*/lib' | sort -V)
@@ -30,25 +28,20 @@ else
 	echo "[!] Skip: $CACHE_SOLANA_DIR not found"
 fi
 
-echo "[*] Collecting solana-program compiled release/deps rlibs from factory crates/"
+echo "[*] Collecting compiled release/deps rlibs from factory crates/"
 while IFS= read -r crate_dir; do
 	base="$(basename "$crate_dir")"
-	case "$base" in
-	solana-program-*)
-		prog_ver="${base#solana-program-}"
-		for target in sbf-solana-solana sbpfv3-solana-solana; do
-			release_dir="$crate_dir/target/$target/release"
-			[ -d "$release_dir" ] || continue
-			dst_release="$OUT_DIR/solana-program/$prog_ver/$target/release"
-			dst_deps="$OUT_DIR/solana-program/$prog_ver/$target/release-deps"
-			mkdir -p "$dst_release" "$dst_deps"
-			find "$release_dir" -maxdepth 1 -type f -name 'lib*.rlib' -exec cp -f {} "$dst_release/" \;
-			if [ -d "$release_dir/deps" ]; then
-				find "$release_dir/deps" -maxdepth 1 -type f -name '*.rlib' -exec cp -f {} "$dst_deps/" \;
-			fi
-		done
-		;;
-	esac
+	for target in sbf-solana-solana sbpfv3-solana-solana; do
+		release_dir="$crate_dir/target/$target/release"
+		[ -d "$release_dir" ] || continue
+		dst_release="$OUT_DIR/crate-builds/$base/$target/release"
+		dst_deps="$OUT_DIR/crate-builds/$base/$target/release-deps"
+		mkdir -p "$dst_release" "$dst_deps"
+		find "$release_dir" -maxdepth 1 -type f -name 'lib*.rlib' -exec cp -f {} "$dst_release/" \;
+		if [ -d "$release_dir/deps" ]; then
+			find "$release_dir/deps" -maxdepth 1 -type f -name '*.rlib' -exec cp -f {} "$dst_deps/" \;
+		fi
+	done
 done < <(find "$FACTORY_DIR/crates" -maxdepth 1 -mindepth 1 -type d | sort)
 
 echo "[*] Collecting exported factory rlibs from rlibs/"

@@ -24,3 +24,13 @@ Makefile
 config.h
 src/core_ghidra.dylib
 config.mk
+
+# Solana build artifacts and temp files
+sys/tmp-*/
+sys/sdb/
+sys/solana-sbpf-rlib-release/
+sys/solana-ida-signatures-factory/*.tar.bz2
+sys/solana-ida-signatures-factory/*.tar.gz
+*.log
+__pycache__/
+.DS_Store

@@ -1,6 +1,7 @@
 import argparse
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 
@@ -24,6 +25,38 @@ init()
 ROOT_DIR = pathlib.Path(__file__).resolve().parent
 CRATES_DIR = ROOT_DIR / "crates"
 RLIBS_DIR = ROOT_DIR / "rlibs"
+
+# Matches Cargo dep rlib stem: lib<crate_name>-<16hex_metadata_hash>
+_DEP_RLIB_RE = re.compile(r"^lib(.+)-([0-9a-f]{16})$")
+
+
+def parse_cargo_lock_versions(cargo_lock_path: pathlib.Path) -> dict[str, list[str]]:
+    """Parse Cargo.lock → {underscored_crate_name: [versions]}."""
+    if not cargo_lock_path.exists():
+        return {}
+    text = cargo_lock_path.read_text(encoding="utf-8", errors="ignore")
+    result: dict[str, list[str]] = {}
+    for m in re.finditer(
+        r'^\[\[package\]\]\s*\nname\s*=\s*"([^"]+)"\s*\nversion\s*=\s*"([^"]+)"',
+        text,
+        re.MULTILINE,
+    ):
+        name = m.group(1).replace("-", "_")
+        result.setdefault(name, []).append(m.group(2))
+    return result
+
+
+def resolve_dep_rlib_name(stem: str, lock_versions: dict[str, list[str]], tools_tag: str) -> str:
+    """libarrayref-0cbcb299f4d7550d → libarrayref-0.3.9-v1_48"""
+    m = _DEP_RLIB_RE.match(stem)
+    if not m:
+        return f"{stem}-{tools_tag}"
+    crate_name = m.group(1)
+    versions = lock_versions.get(crate_name, [])
+    if len(versions) == 1:
+        return f"lib{crate_name}-{versions[0]}-{tools_tag}"
+    # Multiple versions or not in lock → keep hash for disambiguation
+    return f"{stem}-{tools_tag}"
 
 
 def resolve_versions_file(path_str: str):
@@ -129,6 +162,7 @@ def main():
     )
     parser.add_argument("--cleanup-target", action="store_true", help="Delete crate target/ after copying rlib")
     parser.add_argument("--cleanup-solana", action="store_true", help="Run remove-solana.sh after each version")
+    parser.add_argument("--extract-deps", action="store_true", help="Also copy deps/*.rlib from target release/deps/")
     parser.add_argument("--crate", required=True, help="The crate to get the rlib from")
     parser.add_argument("--versions-file", help="The file containing versions to build")
     parser.add_argument("--version", help="Single crate version to build")
@@ -182,21 +216,51 @@ def main():
                 )
                 continue
 
-            rlib_path = (
-                CRATES_DIR / f"{crate}-{version}" / "target" / "sbf-solana-solana" / "release" / f"lib{crate.replace('-', '_')}.rlib"
-            )
-            if not rlib_path.exists():
-                print(f"{Fore.RED}Rlib for {crate}:{version} not found at {rlib_path}{Style.RESET_ALL}")
+            rlib_name = f"lib{crate.replace('-', '_')}.rlib"
+            crate_target_dir = CRATES_DIR / f"{crate}-{version}" / "target"
+            rlib_path = None
+            release_dir = None
+            for triple in ("sbf-solana-solana", "sbpfv3-solana-solana"):
+                candidate = crate_target_dir / triple / "release" / rlib_name
+                if candidate.exists():
+                    rlib_path = candidate
+                    release_dir = crate_target_dir / triple / "release"
+                    break
+            if rlib_path is None:
+                print(f"{Fore.RED}Rlib for {crate}:{version} not found under {crate_target_dir}{Style.RESET_ALL}")
                 continue
 
-            target_path = RLIBS_DIR / crate / f"{crate.replace('-', '_')}-{version}.rlib"
+            tools_tag = args.platform_tools_version.replace(".", "_")
+            target_path = RLIBS_DIR / crate / f"lib{crate.replace('-', '_')}-{version}-{tools_tag}.rlib"
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(rlib_path, target_path)
-            print(
-                f"{Fore.GREEN}Rlib for {crate}:{version} saved to {target_path} "
-                f"(compiler={used_compiler}){Style.RESET_ALL}"
-            )
+            if target_path.exists():
+                print(f"{Fore.YELLOW}Rlib {target_path.name} already exists, skipping{Style.RESET_ALL}")
+            else:
+                shutil.copy(rlib_path, target_path)
+                print(
+                    f"{Fore.GREEN}Rlib for {crate}:{version} saved to {target_path} "
+                    f"(compiler={used_compiler}){Style.RESET_ALL}"
+                )
             success_count += 1
+
+            if args.extract_deps and release_dir is not None:
+                deps_dir = release_dir / "deps"
+                if deps_dir.is_dir():
+                    crate_dir = CRATES_DIR / f"{crate}-{version}"
+                    lock_versions = parse_cargo_lock_versions(crate_dir / "Cargo.lock")
+                    deps_dst = RLIBS_DIR / crate / "deps"
+                    deps_dst.mkdir(parents=True, exist_ok=True)
+                    dep_count = 0
+                    for dep_rlib in sorted(deps_dir.glob("*.rlib")):
+                        out_name = resolve_dep_rlib_name(dep_rlib.stem, lock_versions, tools_tag)
+                        dep_target = deps_dst / f"{out_name}.rlib"
+                        if not dep_target.exists():
+                            shutil.copy(dep_rlib, dep_target)
+                            dep_count += 1
+                    if dep_count:
+                        print(
+                            f"{Fore.CYAN}  deps: {dep_count} new rlibs from {crate}:{version}{Style.RESET_ALL}"
+                        )
 
             if args.cleanup_target:
                 target_dir = CRATES_DIR / f"{crate}-{version}" / "target"
