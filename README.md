@@ -1,54 +1,164 @@
 <img width="150" height="150" align="left" style="float: left; margin: 0 10px 0 0;" alt="r2ghidra logo" src="https://raw.githubusercontent.com/radareorg/r2ghidra/master/dist/images/logo.png">
 
-# r2ghidra
+# r2ghidra-solana
 
-[![ci](https://github.com/radareorg/r2ghidra/actions/workflows/ci.yml/badge.svg)](https://github.com/radareorg/r2ghidra/actions/workflows/ci.yml)
+[![ci](https://github.com/cpkt9762/r2ghidra-solana/actions/workflows/ci.yml/badge.svg)](https://github.com/cpkt9762/r2ghidra-solana/actions/workflows/ci.yml)
 
-This is an integration of the Ghidra decompiler for [radare2](https://github.com/radareorg/radare2).
-It is solely based on the decompiler part of Ghidra, which is written entirely in
-C++, so Ghidra itself is not required at all and the plugin can be built self-contained.
-This project was presented at r2con 2019 as part of the Cutter talk: [https://youtu.be/eHtMiezr7l8?t=950](https://youtu.be/eHtMiezr7l8?t=950)
+Ghidra decompiler plugin for [radare2](https://github.com/radareorg/radare2) with **Solana sBPF** enhancements. Fork of [radareorg/r2ghidra](https://github.com/radareorg/r2ghidra) — adds 6 Solana-specific analyzers that transform raw hex offsets into meaningful account field names, resolve syscalls, and recover Anchor dispatch tables.
 
-## Installing
+> **Requires**: [radare2-solana](https://github.com/cpkt9762/radare2-solana) (provides the sBPF disassembler architecture plugin)
 
-An r2pm package is available that can easily be installed like:
+<br clear="left"/>
+
+## What's Different from Upstream r2ghidra?
+
+| Feature | Upstream r2ghidra | r2ghidra-solana |
+|---|---|---|
+| sBPF input buffer offsets | Raw hex (`0x50`, `0x2870`) | Named symbols (`ACCOUNT_0_LAMPORTS`, `ACCOUNT_1_KEY`) |
+| Solana syscall resolution | No | Yes — 42+ syscalls (`sol_invoke_signed_c`, `sol_log_`, etc.) |
+| Anchor discriminator dispatch | No | Auto-detected, labeled |
+| Global pointer strings | No | Resolved to string literals |
+| Struct field hints | No | Type-aware field annotations |
+| IDA signature factory | No | Generate `.sig` files from Solana program `.rlib` |
+
+## Showcase
+
+### Decompilation (`pdg`)
+
+The decompiler automatically resolves Solana input buffer offsets into human-readable account field names:
+
+```c
+uint64_t entry0(uint8_t *input)
+{
+    // ...
+    if (*input != 3) {
+        return 1;
+    }
+    if ((*(input + ACCOUNT_1_HEADER) != 0xff) || (*(input + ACCOUNT_2_HEADER) != 0xff)) {
+        return 2;
+    }
+    if (*(input + INSTRUCTION_DATA_LEN) != 8) {
+        return 3;
+    }
+    uStack_11c = *(input + INSTRUCTION_DATA);
+    if (uStack_11c <= *(input + ACCOUNT_0_LAMPORTS)) {
+        puStack_e0 = input + ACCOUNT_0_KEY;
+        puStack_d0 = input + ACCOUNT_1_KEY;
+        puStack_110 = input + ACCOUNT_2_KEY;
+        puStack_b0 = input + ACCOUNT_0_KEY;
+        puStack_a8 = input + ACCOUNT_0_LAMPORTS;
+        uStack_a0 = *(input + ACCOUNT_0_DATA_LEN);
+        puStack_98 = input + ACCOUNT_0_DATA;
+        puStack_90 = input + ACCOUNT_0_OWNER;
+        uStack_88 = *(input + ACCOUNT_0_RENT_EPOCH);
+        puStack_78 = input + ACCOUNT_1_KEY;
+        puStack_70 = input + ACCOUNT_1_LAMPORTS;
+        uStack_68 = *(input + ACCOUNT_1_DATA_LEN);
+        puStack_60 = input + ACCOUNT_1_DATA;
+        puStack_58 = input + ACCOUNT_1_OWNER;
+        uStack_50 = *(input + ACCOUNT_1_RENT_EPOCH);
+        entry0(&puStack_110, &puStack_b0, 2, 0, 0);
+        return 0;
+    }
+    return 4;
+}
+```
+
+### Disassembly (`pdf`)
 
 ```
-r2pm -U
-r2pm -ci r2ghidra
+            ;-- entrypoint:
+┌ 992: entry0 ();
+│           0x000000e8      ldxdw r2, [r1]
+│       ┌─< 0x000000f0      jne r2, 0x3, 0x00000468
+│       │   0x000000f8      ldxb r2, [r1+0x2868]
+│      ┌──< 0x00000100      jne r2, 0xff, 0x00000480
+│      ││   0x00000108      ldxb r2, [r1+0x50c8]
+│     ┌───< 0x00000110      jne r2, 0xff, 0x00000480
+│     │││   0x00000118      ldxdw r4, [r1+0x7938]
+│    ┌────< 0x00000120      jne r4, 0x8, 0x00000498
+│    ││││   0x00000128      ldxdw r4, [r1+0x7940]
+│    ││││   0x00000130      ldxdw r2, [r1+0x50]
+│   ┌─────< 0x00000138      jlt r2, r4, 0x000004b0
+│   │││││   0x00000140      mov64 r9, r10
+│   │││││   0x00000148      sub64 r9, 0x120
+│   │││││   ...
 ```
 
-By default r2pm will install stuff in your home, you can use `-g` to use the system wide installation.
+## Solana Analyzers
 
-## Dependencies
+| Analyzer | Description |
+|---|---|
+| `SolanaInputOffsetAnalyzer` | Maps input buffer byte offsets to account field names (`ACCOUNT_N_KEY`, `ACCOUNT_N_LAMPORTS`, etc.) |
+| `SolanaCallResolver` | Resolves sBPF syscall hashes to named functions (`sol_invoke_signed_c`, `sol_log_64`, etc.) |
+| `SolanaAnchorDispatcherAnalyzer` | Detects and labels Anchor 8-byte discriminator dispatch tables |
+| `SolanaGlobalPtrStringAnalyzer` | Resolves global pointer loads to string literal annotations |
+| `SolanaStringFromPtrLenAnalyzer` | Reconstructs string references from pointer+length pairs |
+| `SolanaStructFieldHintAnalyzer` | Annotates struct field accesses with type information |
 
-To build and install r2ghidra you need the following software installed in your system:
+## Installation
 
-* radare2 (preferably from git, for distro builds ensure the `-dev` package is also installed)
-* pkg-config - that's how build system find libraries and include files to compile stuff
-* acr/make or meson/ninja - pick the build system you like! all of them are maintained and working
-* msvc/g++/clang++ - basically a C++ compiler (and a C compiler)
-* git/patch - needed to clone ghidra-native and build stuff
+### Prerequisites
 
-If the build fails, please carefully read the error message and act accordingly, r2pm should
-handle the `PKG_CONFIG_PATH` automatically for you in any case.
+Install [radare2-solana](https://github.com/cpkt9762/radare2-solana) first (provides the sBPF arch plugin):
 
-## Portability
+```bash
+git clone https://github.com/cpkt9762/radare2-solana.git
+cd radare2-solana
+sys/install.sh
+```
 
-r2ghidra is known to work on the following operating systems:
+### Build r2ghidra-solana
 
-* Termux (Android-arm64)
-* macOS / iOS
-* GNU/Linux
-* Windows
-* FreeBSD/x86-64
+```bash
+git clone https://github.com/cpkt9762/r2ghidra-solana.git
+cd r2ghidra-solana
+./preconfigure
+./configure
+make -j$(nproc)
+make install  # or: make user-install
+```
+
+### One-liner Install (both repos)
+
+```bash
+curl -sSL https://raw.githubusercontent.com/cpkt9762/r2ghidra-solana/master/install.sh | bash
+```
+
+### Verify Installation
+
+```bash
+# Should show the r2ghidra plugin loaded
+r2 -qc 'Lc' --
+
+# Decompile a Solana program
+r2 -a sbpf -qc 'aa; s entry0; pdg' your_program.so
+```
+
+## Quick Start
+
+```bash
+# Dump a Solana program from mainnet
+solana program dump <PROGRAM_ID> program.so
+
+# Open with radare2 (sBPF arch is auto-detected)
+r2 program.so
+
+# Inside r2:
+[0x000000e8]> aa          # analyze all
+[0x000000e8]> afl         # list functions
+[0x000000e8]> s entry0    # seek to entrypoint
+[0x000000e8]> pdg         # decompile with Ghidra + Solana enhancements
+[0x000000e8]> pdf         # disassemble
+[0x000000e8]> pdga        # side-by-side disasm + decompilation
+```
 
 ## Usage
 
-To decompile a function, first type `af` to analize it and then `pdg` to invoke r2ghidra:
+All standard r2ghidra commands work:
 
 ```
-[0x100001060]> pdg?
+[0x000000e8]> pdg?
 Usage: pdg  # Native Ghidra decompiler plugin
 | pdg           # Decompile current function with the Ghidra decompiler
 | pdg*          # Decompiled code is returned to r2 as comment
@@ -56,89 +166,36 @@ Usage: pdg  # Native Ghidra decompiler plugin
 | pdgd          # Dump the debug XML Dump
 | pdgj          # Dump the current decompiled function as JSON
 | pdgo          # Decompile current function side by side with offsets
-| pdgp          # Switch to RAsm and RAnal plugins driven by SLEIGH from Ghidra
 | pdgs          # Display loaded Sleigh Languages
 | pdgsd N       # Disassemble N instructions with Sleigh and print pcode
 | pdgss         # Display automatically matched Sleigh Language ID
 | pdgx          # Dump the XML of the current decompiled function
 ```
 
-The following config vars (for the `e` command) can be used to adjust r2ghidra's behavior:
+## IDA Signature Factory
 
-```
-[0x000275a7]> e?r2ghidra.
-      r2ghidra.casts: Show type casts where needed
-    r2ghidra.cmt.cpp: C++ comment style
- r2ghidra.cmt.indent: Comment indent
-     r2ghidra.indent: Indent increment
-       r2ghidra.lang: Custom Sleigh ID to override auto-detection (e.g. x86:LE:32:default)
-    r2ghidra.linelen: Max line length
- r2ghidra.maximplref: Maximum number of references to an expression before showing an explicit variable.
-     r2ghidra.rawptr: Show unknown globals as raw addresses instead of variables
-     r2ghidra.roprop: Propagate read-only constants (0,1,2,3,4)
- r2ghidra.sleighhome: SLEIGHHOME
-    r2ghidra.timeout: Run decompilation in a separate process and kill it after a specific time
-    r2ghidra.verbose: Show verbose warning messages while decompiling
-```
+The `sys/solana-ida-signatures-factory/` directory contains tooling to generate IDA-compatible `.sig` signature files from Solana program `.rlib` archives. This enables function identification in stripped binaries.
 
-Here, `r2ghidra.sleighhome` must point to a directory containing the `*.sla`, `*.lspec`, ... files for
-the architectures that should supported by the decompiler. This is however set up automatically when using
-the r2pm package or installing as shown below.
+## Dependencies
 
-## Installation
+* [radare2-solana](https://github.com/cpkt9762/radare2-solana) — sBPF architecture plugin (must be installed first)
+* pkg-config
+* C++ compiler (g++/clang++/msvc)
+* acr/make or meson/ninja
+* git/patch
 
-Most users will just use `r2pm -ci r2ghidra` to build or update the plugin for the version of r2
+## Portability
 
-### Windows Binary installation
+Tested on:
 
-First, make sure you have the latest version of radare2 for Windows, which can be found as a binary package [in the releases](https://github.com/radareorg/radare2/releases).
+* macOS (arm64 / x86_64)
+* GNU/Linux (x86_64)
+* Windows (x64)
 
-Then run the following command from the radare2/bin/ directory to find out the `R2_USER_PLUGINS` path:
+## Upstream
 
-```
-$ r2 -hh
-```
-
-Now, download the [latest r2ghidra release](https://github.com/radareorg/r2ghidra/releases) for Windows and copy the dll file in the `R2_USER_PLUGINS` directory.
-
-You should now be able to do `pdg` while in radare2 to invoke the r2ghidra decompile command.
-
-## Building
-
-r2ghidra can be built with `meson/ninja` and `acr/make`. Both build systems are maintained, feel free to pick the one you feel more comfortable with.
-
-### ACR/Make
-
-The procedure is like the standard autoconf:
-
-```
-$ ./preconfigure   # optional, but useful for offline-packagers, as its downloads the external repos
-$ ./configure --prefix=$(r2 -H R2_PREFIX)
-$ make
-$ make install  # or make user-install
-```
-At the moment there is no way to select which processors to support, so it builds them all and takes a lot of time to compile the sleighfiles.
-
-### Meson/Ninja
-
-Also works with `muon/samu` and that's the preferred way to build r2ghidra on Windows.
-
-```
-meson setup b
-meson compile -C b
-meson install -C b
-```
-
-### Windows
-
-To compile r2ghidra on windows you need Visual Studio and git installed:
-
-```cmd
-preconfigure   # find VS installation, sets path and download external code
-configure      # prepare the build (run meson)
-make           # compile and zip the result (run ninja)
-```
+This is a fork of [radareorg/r2ghidra](https://github.com/radareorg/r2ghidra). Solana-specific changes are isolated in `src/Solana*.cpp/h` files and minimal patches to `core_ghidra.cpp`, `R2Architecture.h/cpp`, and `R2PrintC.cpp`.
 
 ## License
 
-See `LICENSE.md` for more details. but it's basically **LGPLv3**.
+See `LICENSE.md` for details — **LGPLv3**.
