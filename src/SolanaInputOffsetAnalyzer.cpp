@@ -20,27 +20,27 @@ struct OffsetSymbol {
 const char *lookup_offset_symbol(uintb offset) {
 	static const OffsetSymbol kOffsetSymbols[] = {
 		{ 0x0000, "NUM_ACCOUNTS" },
-		{ 0x0008, "OWNER_HEADER" },
-		{ 0x0010, "OWNER_KEY" },
-		{ 0x0030, "OWNER_OWNER" },
-		{ 0x0050, "OWNER_LAMPORTS" },
-		{ 0x0058, "OWNER_DATA_LEN" },
-		{ 0x0060, "OWNER_DATA" },
-		{ 0x2860, "OWNER_RENT_EPOCH" },
-		{ 0x2868, "COUNTER_HEADER" },
-		{ 0x2870, "COUNTER_KEY" },
-		{ 0x2890, "COUNTER_OWNER" },
-		{ 0x28b0, "COUNTER_LAMPORTS" },
-		{ 0x28b8, "COUNTER_DATA_LEN" },
-		{ 0x28c0, "COUNTER_DATA" },
-		{ 0x50c0, "COUNTER_RENT_EPOCH" },
-		{ 0x50c8, "SYSTEM_PROGRAM_HEADER" },
-		{ 0x50d0, "SYSTEM_PROGRAM_KEY" },
-		{ 0x50f0, "SYSTEM_PROGRAM_OWNER" },
-		{ 0x5110, "SYSTEM_PROGRAM_LAMPORTS" },
-		{ 0x5118, "SYSTEM_PROGRAM_DATA_LEN" },
-		{ 0x5120, "SYSTEM_PROGRAM_DATA" },
-		{ 0x7930, "SYSTEM_PROGRAM_RENT_EPOCH" },
+		{ 0x0008, "ACCOUNT_0_HEADER" },
+		{ 0x0010, "ACCOUNT_0_KEY" },
+		{ 0x0030, "ACCOUNT_0_OWNER" },
+		{ 0x0050, "ACCOUNT_0_LAMPORTS" },
+		{ 0x0058, "ACCOUNT_0_DATA_LEN" },
+		{ 0x0060, "ACCOUNT_0_DATA" },
+		{ 0x2860, "ACCOUNT_0_RENT_EPOCH" },
+		{ 0x2868, "ACCOUNT_1_HEADER" },
+		{ 0x2870, "ACCOUNT_1_KEY" },
+		{ 0x2890, "ACCOUNT_1_OWNER" },
+		{ 0x28b0, "ACCOUNT_1_LAMPORTS" },
+		{ 0x28b8, "ACCOUNT_1_DATA_LEN" },
+		{ 0x28c0, "ACCOUNT_1_DATA" },
+		{ 0x50c0, "ACCOUNT_1_RENT_EPOCH" },
+		{ 0x50c8, "ACCOUNT_2_HEADER" },
+		{ 0x50d0, "ACCOUNT_2_KEY" },
+		{ 0x50f0, "ACCOUNT_2_OWNER" },
+		{ 0x5110, "ACCOUNT_2_LAMPORTS" },
+		{ 0x5118, "ACCOUNT_2_DATA_LEN" },
+		{ 0x5120, "ACCOUNT_2_DATA" },
+		{ 0x7930, "ACCOUNT_2_RENT_EPOCH" },
 		{ 0x7938, "INSTRUCTION_DATA_LEN" },
 		{ 0x7940, "INSTRUCTION_DATA" },
 		{ 0x7942, "PROGRAM_ID" },
@@ -54,7 +54,7 @@ const char *lookup_offset_symbol(uintb offset) {
 }
 
 constexpr uintb kInputCompensation = 0x10;
-constexpr const char *kInputCompensationSymbol = "COUNTER_DATA_COMPENSATION";
+constexpr const char *kInputCompensationSymbol = "ACCOUNT_1_DATA_COMPENSATION";
 
 bool is_instruction_tail_offset(uintb offset) {
 	switch (offset) {
