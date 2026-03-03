@@ -176,6 +176,8 @@ Usage: pdg  # Native Ghidra decompiler plugin
 
 The `sys/solana-ida-signatures-factory/` directory contains tooling to generate IDA-compatible `.sig` signature files from Solana program `.rlib` archives. This enables function identification in stripped binaries.
 
+Pre-built `.rlib` archives for common Solana SDK crates are available at **[solana-sbpf-rlib](https://github.com/cpkt9762/solana-sbpf-rlib)**.
+
 ## Dependencies
 
 * [radare2-solana](https://github.com/cpkt9762/radare2-solana) — sBPF architecture plugin (must be installed first)
