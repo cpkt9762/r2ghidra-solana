@@ -19,8 +19,8 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
-    - name: Installing radare2 from git
-      run: ( git clone --depth=1 https://github.com/radareorg/radare2 && cd radare2 && sys/install.sh /usr )
+    - name: Installing radare2-solana from git
+      run: ( git clone --depth=1 https://github.com/cpkt9762/radare2-solana.git radare2 && cd radare2 && sys/install.sh /usr )
     - name: Building r2ghidra with acr
       run: ./preconfigure && ./configure --prefix=/usr && make -j4 ; make user-install
     - name: Testing r2ghidra oneliner on home setup
@@ -41,11 +41,8 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
-    - name: Installing radare2 from deb
-      run: |
-        wget https://github.com/radareorg/radare2/releases/download/${{env.R2V}}/radare2_${{env.R2V}}_amd64.deb
-        wget https://github.com/radareorg/radare2/releases/download/${{env.R2V}}/radare2-dev_${{env.R2V}}_amd64.deb
-        sudo dpkg -i *.deb
+    - name: Installing radare2-solana from git
+      run: ( git clone --depth=1 https://github.com/cpkt9762/radare2-solana.git radare2 && cd radare2 && sudo sys/install.sh /usr )
     - name: Building r2ghidra with acr
       run: ./preconfigure && ./configure --prefix=/usr && make -j4 ; make user-install
     - name: Testing r2ghidra oneliner on home setup
@@ -75,12 +72,8 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
-    - name: Installing radare2 from deb
-      run: |
-        wget https://github.com/radareorg/radare2/releases/download/${{env.R2V}}/radare2_${{env.R2V}}_amd64.deb
-        wget https://github.com/radareorg/radare2/releases/download/${{env.R2V}}/radare2-dev_${{env.R2V}}_amd64.deb
-        sudo dpkg -i *.deb
-        rm *.deb
+    - name: Installing radare2-solana from git
+      run: ( git clone --depth=1 https://github.com/cpkt9762/radare2-solana.git radare2 && cd radare2 && sudo sys/install.sh /usr )
     - name: Building tars
       run: make -C dist/tarball
     - name: Uploading balls
@@ -100,9 +93,8 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
-    - name: Installing radare2
-    #  run: ( git clone --depth=1 --branch "${R2V}" https://github.com/radareorg/radare2 && cd radare2 && sys/sanitize.sh --install /usr )
-      run: ( git clone --depth=1 --branch "${R2V}" https://github.com/radareorg/radare2 && cd radare2 && sys/install.sh --install )
+    - name: Installing radare2-solana
+      run: ( git clone --depth=1 https://github.com/cpkt9762/radare2-solana.git radare2 && cd radare2 && sys/install.sh --install )
     - name: Building r2ghidra with acr
       run: ./preconfigure && ./configure && make asan && make -C src sleigh-build && make user-install
     - name: Testing r2ghidra oneliner
@@ -117,12 +109,12 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
-    - name: Downloading Radare2 Debian packages
+    - name: Installing radare2-solana from git
       run: |
-        wget -O r2.deb     https://github.com/radareorg/radare2/releases/download/${{env.R2V}}/radare2_${{env.R2V}}_amd64.deb
-        wget -O r2-dev.deb https://github.com/radareorg/radare2/releases/download/${{env.R2V}}/radare2-dev_${{env.R2V}}_amd64.deb
+        git clone --depth=1 https://github.com/cpkt9762/radare2-solana.git radare2
+        cd radare2 && sudo sys/install.sh /usr
     - name: Installing Radare2
-      run: sudo dpkg -i r2.deb r2-dev.deb
+      run: echo "radare2-solana installed from source"
     - name: Installing User's Meson Ninja
       run: pip install ninja meson && ninja --version && meson --version
     - name: Installing System's Meson Ninja
@@ -152,8 +144,8 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
-    - name: Cloning radare2
-      run: git clone --depth=1 --branch "${R2V}" https://github.com/radareorg/radare2
+    - name: Cloning radare2-solana
+      run: git clone --depth=1 https://github.com/cpkt9762/radare2-solana.git radare2
     - name: Building Radare2 pkg for macOS
       run: |
         echo "Building radare2 for architecture: $ARCH"
@@ -200,9 +192,9 @@ jobs:
     - name: install r2
       shell: bash
       run: |
-        python -m wget https://github.com/radareorg/radare2/releases/download/${{env.R2V}}/radare2-${{env.R2V}}-w64.zip -o r2.zip
-        python3 -m zipfile -e r2.zip .
-        mv radare2-${{env.R2V}}-w64 radare2
+        git clone --depth=1 https://github.com/cpkt9762/radare2-solana.git radare2
+        cd radare2 && pip install meson && meson setup b && ninja -C b && sudo ninja -C b install
+        cd ..
         pwd
     - name: batmake
       shell: cmd
