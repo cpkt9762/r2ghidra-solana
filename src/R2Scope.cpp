@@ -364,10 +364,18 @@ FunctionSymbol *R2Scope::registerFunction(RAnalFunction *fcn) const {
 	}
 
 	RangeList varRanges; // to check for overlaps
+#if R2_VERSION_NUMBER >= 60109
+	RVecAnalVarPtr *vars = nullptr;
+#else
 	RList *vars = NULL;
+#endif
 	
 	if (r_config_get_b (core->config, "r2ghidra.vars")) {
+#if R2_VERSION_NUMBER >= 60109
+		vars = r_anal_function_vars (core->anal, fcn);
+#else
 		vars = r_anal_var_all_list (core->anal, fcn);
+#endif
 	}
 	auto stackSpace = arch->getStackSpace ();
 
@@ -426,7 +434,7 @@ FunctionSymbol *R2Scope::registerFunction(RAnalFunction *fcn) const {
 	PrototypePieces sig_proto;
 
 	if (vars) {
-		r_list_foreach_cpp<RAnalVar>(vars, [&](RAnalVar *var) {
+		auto collectVarType = [&](RAnalVar *var) {
 			std::string typeError;
 			Datatype *type = var->type ? arch->getTypeFactory()->fromCString(var->type, &typeError) : nullptr;
 			if (!type) {
@@ -457,7 +465,15 @@ FunctionSymbol *R2Scope::registerFunction(RAnalFunction *fcn) const {
 			int4 i = params.whichTrial(addr, paramSize);
 			params.getTrial(i).markActive();
 			params.getTrial(i).markUsed();
-		});
+		};
+#if R2_VERSION_NUMBER >= 60109
+		RAnalVar **it;
+		R_VEC_FOREACH (vars, it) {
+			collectVarType (*it);
+		}
+#else
+		r_list_foreach_cpp<RAnalVar>(vars, collectVarType);
+#endif
 	}
 
 	if (proto) {
@@ -487,7 +503,7 @@ FunctionSymbol *R2Scope::registerFunction(RAnalFunction *fcn) const {
 	if (vars) {
 		std::vector<Element *> argsByIndex;
 
-		r_list_foreach_cpp<RAnalVar>(vars, [&](RAnalVar *var) {
+		auto emitVar = [&](RAnalVar *var) {
 			if (used_sig_args && var->isarg) {
 				return;
 			}
@@ -583,7 +599,15 @@ FunctionSymbol *R2Scope::registerFunction(RAnalFunction *fcn) const {
 			auto rangelist = child(mapsymElement, "rangelist");
 			if (var->isarg && var->kind == R_ANAL_VAR_KIND_REG)
 				childRegRange(rangelist);
-		});
+		};
+#if R2_VERSION_NUMBER >= 60109
+		RAnalVar **it;
+		R_VEC_FOREACH (vars, it) {
+			emitVar (*it);
+		}
+#else
+		r_list_foreach_cpp<RAnalVar>(vars, emitVar);
+#endif
 
 		// Add placeholder args in gaps
 		for (size_t i = 0; i < argsByIndex.size (); i++) {
@@ -615,7 +639,11 @@ FunctionSymbol *R2Scope::registerFunction(RAnalFunction *fcn) const {
 		}
 	}
 
+#if R2_VERSION_NUMBER >= 60109
+	RVecAnalVarPtr_free (vars);
+#else
 	r_list_free (vars);
+#endif
 
 	auto prototypeElement = child(functionElement, "prototype", {
 		{ "extrapop", to_string(extraPop) },

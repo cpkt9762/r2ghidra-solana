@@ -153,14 +153,23 @@ static bool is_executable_target(RCore *core, ut64 addr) {
 	if (!core || !core->bin) {
 		return false;
 	}
+#if R2_VERSION_NUMBER >= 60109
+	RVecRBinSection *sections = r_bin_get_sections_vec (core->bin);
+#else
 	const RList *sections = r_bin_get_sections (core->bin);
+#endif
 	if (!sections) {
 		return false;
 	}
+#if R2_VERSION_NUMBER >= 60109
+	RBinSection *sec = nullptr;
+	R_VEC_FOREACH (sections, sec) {
+#else
 	RListIter *iter;
 	void *pos;
 	r_list_foreach (sections, iter, pos) {
 		auto *sec = reinterpret_cast<RBinSection *>(pos);
+#endif
 		if (!sec) {
 			continue;
 		}
