@@ -39,14 +39,23 @@ static bool LooksLikeSolanaBpf(RCore *core) {
 			return true;
 		}
 	}
+#if R2_VERSION_NUMBER >= 60109
+	RVecRBinImport *imports = r_bin_get_imports_vec (core->bin);
+#else
 	const RList *imports = r_bin_get_imports (core->bin);
+#endif
 	if (!imports) {
 		return false;
 	}
+#if R2_VERSION_NUMBER >= 60109
+	RBinImport *imp = nullptr;
+	R_VEC_FOREACH (imports, imp) {
+#else
 	RListIter *iter = nullptr;
 	void *pos = nullptr;
 	r_list_foreach (imports, iter, pos) {
 		auto *imp = reinterpret_cast<RBinImport *>(pos);
+#endif
 		const char *name = (imp && imp->name) ? r_bin_name_tostring (imp->name) : nullptr;
 		if (IsLikelySolanaImport (name)) {
 			return true;
@@ -59,17 +68,26 @@ static bool LooksLikeSbpfV3Layout(RCore *core) {
 	if (!core || !core->bin) {
 		return false;
 	}
+#if R2_VERSION_NUMBER >= 60109
+	RVecRBinSection *sections = r_bin_get_sections_vec (core->bin);
+#else
 	const RList *sections = r_bin_get_sections (core->bin);
+#endif
 	if (!sections) {
 		return false;
 	}
 	bool rodata_high = false;
 	bool stack_high = false;
 	bool heap_high = false;
+#if R2_VERSION_NUMBER >= 60109
+	RBinSection *sec = nullptr;
+	R_VEC_FOREACH (sections, sec) {
+#else
 	RListIter *iter = nullptr;
 	void *pos = nullptr;
 	r_list_foreach (sections, iter, pos) {
 		auto *sec = reinterpret_cast<RBinSection *>(pos);
+#endif
 		if (!sec || !sec->name) {
 			continue;
 		}

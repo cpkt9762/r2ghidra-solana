@@ -125,7 +125,9 @@ static const char* r2ghidra_help[] = {
 	NULL
 };
 static void PrintUsage(const RCore *const core) {
-#if R2_VERSION_NUMBER >= 50909
+#if R2_VERSION_NUMBER >= 60109
+	r_cons_cmd_help (core->cons, r2ghidra_help);
+#elif R2_VERSION_NUMBER >= 50909
 	r_cons_cmd_help (core->cons, r2ghidra_help, core->print->flags & R_PRINT_FLAGS_COLOR);
 #else
 	r_cons_cmd_help (r2ghidra_help, core->print->flags & R_PRINT_FLAGS_COLOR);
@@ -724,7 +726,11 @@ static void _cmd(RCore *core, const char *input) {
 extern "C" bool r2ghidra_core_cmd(RCorePluginSession *cps, const char *input) {
 	RCore *core = cps->core;
 	if (!strcmp (input, "pd:?")) {
+#if R2_VERSION_NUMBER >= 60109
+		r_cons_cmd_help_match (core->cons, r2ghidra_help, "pd:g", 0, false);
+#else
 		r_core_cmd_help_match (core, r2ghidra_help, (char*)"pd:g");
+#endif
 		return false;
 	}
 	if (r_str_startswith (input, "pd:g")) {

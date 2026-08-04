@@ -806,14 +806,23 @@ static void collect_instruction_names_from_binary(RCore *core, std::set<std::str
 	if (!core || !core->bin) {
 		return;
 	}
+#if R2_VERSION_NUMBER >= 60109
+	RVecRBinString *strings = r_bin_get_strings(core->bin);
+#else
 	const RList *strings = r_bin_get_strings(core->bin);
+#endif
 	if (!strings) {
 		return;
 	}
+#if R2_VERSION_NUMBER >= 60109
+	RBinString *s = nullptr;
+	R_VEC_FOREACH (strings, s) {
+#else
 	RListIter *iter;
 	void *pos;
 	r_list_foreach (strings, iter, pos) {
 		auto *s = reinterpret_cast<RBinString *>(pos);
+#endif
 		if (!s || !s->string || !*s->string) {
 			continue;
 		}

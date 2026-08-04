@@ -1717,7 +1717,6 @@ extern "C" int sleigh_op(RAnal *a, RAnalOp *anal_op, ut64 addr, const ut8 *data,
 }
 
 extern "C" bool sleigh_decode(RArchSession *as, RAnalOp *aop, RArchDecodeMask mask) {
-	REsil *esil = as->arch->esil;
 #if R2_VERSION_NUMBER >= 50909
 	RBin *bin = (RBin*)as->arch->binb.bin;
 	RIO *io = (RIO*)bin->iob.io;
@@ -1725,6 +1724,11 @@ extern "C" bool sleigh_decode(RArchSession *as, RAnalOp *aop, RArchDecodeMask ma
 #else
 	RIO *io = Gcore->io;
 	RBin *bin = Gcore->bin;
+#endif
+#if R2_VERSION_NUMBER >= 60109
+	REsil *esil = Gcore->anal->esil;
+#else
+	REsil *esil = as->arch->esil;
 #endif
 	RAnal *anal = Gcore->anal;
 	if (bin != nullptr && esil != nullptr) {
@@ -1998,22 +2002,41 @@ static constexpr int ESIL_PARM_FLOAT = 127; // Avoid conflict
 static bool esil_pushnum_float(REsil *esil, long double num) {
 	char str[64];
 	snprintf (str, sizeof (str) - 1, "%.*LeF", DECIMAL_DIG, num);
+#if R2_VERSION_NUMBER >= 60109
+	return r_esil_push (esil, r_strs_from (str));
+#else
 	return r_esil_push (esil, str);
+#endif
 }
 
 static bool sleigh_esil_consts_pick(REsil *esil) {
 	if (!esil || !esil->stack) {
 		return false;
 	}
+#if R2_VERSION_NUMBER >= 60109
+	RStrs idx = r_esil_pop (esil);
+#else
 	char *idx = r_esil_pop (esil);
+#endif
 	ut64 i;
 	int ret = false;
 
+#if R2_VERSION_NUMBER >= 60109
+	if (r_strs_empty (idx)) {
+		R_LOG_DEBUG ("esil_pick: invalid index number");
+		goto end;
+	}
+#else
+	if (!idx) {
+		R_LOG_DEBUG ("esil_pick: invalid index number");
+		goto end;
+	}
+#endif
 	if (R_ESIL_PARM_REG == r_esil_get_parm_type(esil, idx)) {
 		R_LOG_DEBUG ("sleigh_esil_consts_pick: argument is consts only");
 		goto end;
 	}
-	if (!idx || !r_esil_get_parm(esil, idx, &i)) {
+	if (!r_esil_get_parm(esil, idx, &i)) {
 		R_LOG_DEBUG ("esil_pick: invalid index number");
 		goto end;
 	}
@@ -2021,7 +2044,11 @@ static bool sleigh_esil_consts_pick(REsil *esil) {
 		R_LOG_DEBUG ("esil_pick: index out of stack bounds.");
 		goto end;
 	}
+#if R2_VERSION_NUMBER >= 60109
+	if (r_strs_empty (esil->stack[esil->stackptr - i])) {
+#else
 	if (!esil->stack[esil->stackptr - i]) {
+#endif
 		R_LOG_DEBUG ("esil_pick: undefined element.");
 		goto end;
 	}
@@ -2033,15 +2060,22 @@ static bool sleigh_esil_consts_pick(REsil *esil) {
 	}
 	ret = true;
 end:
+#if R2_VERSION_NUMBER < 60109
 	free (idx);
+#endif
 	return ret;
 }
 
 static bool sleigh_esil_popcount(REsil *esil) {
 	bool ret = false;
 	ut64 s, res = 0;
+#if R2_VERSION_NUMBER >= 60109
+	RStrs src = r_esil_pop (esil);
+	if (!r_strs_empty (src)) {
+#else
 	char *src = r_esil_pop (esil);
 	if (src) {
+#endif
 		if (r_esil_get_parm (esil, src, &s)) {
 			while (s) {
 				s &= s - 1;
@@ -2051,7 +2085,9 @@ static bool sleigh_esil_popcount(REsil *esil) {
 		} else {
 			R_LOG_DEBUG ("sleigh_esil_popcount: invalid parameters.");
 		}
+#if R2_VERSION_NUMBER < 60109
 		free (src);
+#endif
 	} else {
 		R_LOG_DEBUG ("sleigh_esil_popcount: fail to get element from stack.");
 	}
@@ -2086,8 +2122,12 @@ extern "C" int esil_sleigh_fini(REsil *esil) {
 	return true;
 }
 
+#if R2_VERSION_NUMBER >= 60109
+extern "C" bool r2ghidra_esilcb(RArchSession *as, REsil *esil, RArchEsilAction action) {
+#else
 extern "C" bool r2ghidra_esilcb(RArchSession *as, RArchEsilAction action) {
 	REsil *esil = as->arch->esil;
+#endif
 	if (!esil) {
 		R_LOG_ERROR ("esil is null");
 		return false;
@@ -2113,6 +2153,15 @@ extern "C" bool sanal_fini(void *p) {
 }
 
 extern "C" RList *r2ghidra_preludes(RArchSession *as) {
+#if R2_VERSION_NUMBER >= 60109
+	const char *cpu = as->config->cpu;
+	if (R_STR_ISNOTEMPTY (cpu)) {
+		RArchPlugin *plugin = r_arch_find (as->arch, cpu);
+		if (plugin && plugin->preludes && plugin != as->plugin) {
+			return plugin->preludes (as);
+		}
+	}
+#else
 	RListIter *iter;
 	void *_plugin;
 	const char *cpu = as->config->cpu;
@@ -2125,5 +2174,6 @@ extern "C" RList *r2ghidra_preludes(RArchSession *as) {
 			}
 		}
 	}
+#endif
 	return NULL;
 }
