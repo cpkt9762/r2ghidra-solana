@@ -1,0 +1,24 @@
+--- a/src/Processors/sBPF/data/languages/sBPF.sinc
++++ b/src/Processors/sBPF/data/languages/sBPF.sinc
+@@ -8,7 +8,8 @@
+ define space ram type=ram_space size=8 default;
+ define space register type=register_space size=4;
+ # The call target is the full 32-bit imm (syscall hash or relative instruction offset); a narrower space truncates it.
+-define space syscall type=ram_space size=4;
++# Offsets are exported with bit 32 set (see SysCall below), hence the 8-byte width.
++define space syscall type=ram_space size=8;
+ 
+ define register offset=0 size=8 [ R0  R1  R2  R3  R4  R5  R6  R7  R8  R9  R10  PC ];
+ 
+@@ -273,7 +274,10 @@
+ 	if (dst:1) goto joff;
+ }
+ 
+-SysCall:  imm is imm { export *[syscall]:1 imm; }
++# The low 32 bits of the exported offset are imm. Bit 32 keeps the value above 0xffff: when a relative call target
++# is derived from this offset, small values are also read as int16, which picks the wrong callee for forward calls
++# of 0x8000-0xffff instructions. Syscall hash lookups only use the low 32 bits.
++SysCall: tgt is imm [ tgt = (imm & 0xffffffff) | 0x100000000; ] { export *[syscall]:1 tgt; }
+ 
+ :CALL SysCall  is imm & op_alu_jmp_opcode=0x8 & op_alu_jmp_source=0 & op_insn_class=0x5 & SysCall {
+ 	call SysCall;
