@@ -225,93 +225,87 @@ static std::string name_for_target_or_autocreate(RCore *core, ut64 target) {
 	return {};
 }
 
-static bool decode_sbpf_call_imm32(RCore *core, ut64 call_addr, uint32_t *imm) {
+enum class SbpfCallImm {
+	Ok,
+	NotCall,
+	ReadFailed,
+};
+
+static SbpfCallImm read_sbpf_call_imm32(RCore *core, ut64 call_addr, uint32_t *imm) {
 	if (!core || !core->io || !imm) {
-		return false;
+		return SbpfCallImm::ReadFailed;
 	}
 	ut8 bytes[8] = {0};
 	// r_io_read_at() returns bool, not the number of bytes read
 	if (!r_io_read_at (core->io, call_addr, bytes, sizeof (bytes))) {
-		return false;
+		return SbpfCallImm::ReadFailed;
 	}
 	if (bytes[0] != 0x85) {
-		return false;
+		return SbpfCallImm::NotCall;
 	}
 	*imm = read_le32 (bytes + 4);
+	return SbpfCallImm::Ok;
+}
+
+// The internal call target comes from the imm32 of the instruction itself. The pcode target is not used:
+// it is only a copy of imm in the sleigh syscall space and says nothing when the bytes cannot be read.
+static bool compute_sbpf_internal_call_target(
+	RCore *core,
+	const Address &call_addr,
+	ut64 *out_target)
+{
+	uint32_t imm32 = 0;
+	switch (read_sbpf_call_imm32 (core, call_addr.getOffset (), &imm32)) {
+	case SbpfCallImm::Ok:
+		break;
+	case SbpfCallImm::NotCall:
+		// not a plain `call imm` (for example the v3 syscall opcode): there is no internal target
+		return false;
+	case SbpfCallImm::ReadFailed:
+		R_LOG_WARN ("Cannot read the call instruction at 0x%08" PFMT64x ", no internal call target is derived", call_addr.getOffset ());
+		return false;
+	}
+	// Real Solana syscall hashes are encoded in imm32. If matched, this is not an internal call.
+	if (get_sbpf_syscall_name (imm32)) {
+		return false;
+	}
+	const int64_t call_base = static_cast<int64_t> (call_addr.getOffset () + 8);
+	const int64_t target_signed = call_base + static_cast<int64_t> (static_cast<int32_t> (imm32)) * 8;
+	if (target_signed < 0) {
+		return false;
+	}
+	const ut64 target = static_cast<ut64> (target_signed);
+	if (!is_executable_target (core, target)) {
+		return false;
+	}
+	*out_target = target;
 	return true;
 }
 
-static bool collect_sbpf_internal_call_targets(
+static bool resolve_sbpf_internal_call_target_at(
 	R2Architecture *arch,
 	const Address &call_addr,
-	uint64_t imm_hint,
-	std::vector<ut64> &targets)
-{
-	RCoreLock core (arch->getCore ());
-	std::vector<int64_t> rels;
-	uint32_t imm32 = 0;
-	if (decode_sbpf_call_imm32 (core, call_addr.getOffset (), &imm32)) {
-		// Real Solana syscall hashes are encoded in imm32. If matched, this is not an internal call.
-		if (get_sbpf_syscall_name (imm32)) {
-			return {};
-		}
-		rels.push_back (static_cast<int64_t> (static_cast<int32_t> (imm32)));
-	} else {
-		// Fallback path when raw instruction bytes cannot be read.
-		rels.push_back (static_cast<int64_t> (static_cast<int32_t> (imm_hint)));
-		if (imm_hint <= 0xffff) {
-			rels.push_back (static_cast<int64_t> (static_cast<int16_t> (imm_hint)));
-		}
-	}
-	std::sort (rels.begin (), rels.end ());
-	rels.erase (std::unique (rels.begin (), rels.end ()), rels.end ());
-	const int64_t call_base = static_cast<int64_t> (call_addr.getOffset () + 8);
-	for (const int64_t rel : rels) {
-		const int64_t delta = rel * 8;
-		const int64_t target_signed = call_base + delta;
-		if (target_signed < 0) {
-			continue;
-		}
-		const ut64 target = static_cast<ut64> (target_signed);
-		if (!is_executable_target (core, target)) {
-			continue;
-		}
-		targets.push_back (target);
-	}
-	return !targets.empty ();
-}
-
-static bool resolve_sbpf_internal_call_target_with_hint(
-	R2Architecture *arch,
-	const Address &call_addr,
-	uint64_t imm_hint,
 	ut64 *out_target)
 {
 	if (!arch || !out_target) {
 		return false;
 	}
-	std::vector<ut64> targets;
-	if (!collect_sbpf_internal_call_targets (arch, call_addr, imm_hint, targets)) {
+	RCoreLock core (arch->getCore ());
+	ut64 target = 0;
+	if (!compute_sbpf_internal_call_target (core, call_addr, &target)) {
 		return false;
 	}
-	for (ut64 target : targets) {
-		RCoreLock core (arch->getCore ());
-		if (materialize_function_at_target (core, target)) {
-			*out_target = target;
-			return true;
-		}
-	}
-	*out_target = targets.front ();
+	materialize_function_at_target (core, target);
+	*out_target = target;
 	return true;
 }
 
 static std::string resolve_sbpf_internal_call_name(
 	R2Architecture *arch,
-	const Address &call_addr,
-	uint64_t imm_hint)
+	const Address &call_addr)
 {
 	ut64 target = 0;
-	if (!resolve_sbpf_internal_call_target_with_hint (arch, call_addr, imm_hint, &target)) {
+	if (!resolve_sbpf_internal_call_target_at (arch, call_addr, &target)) {
 		return {};
 	}
 	RCoreLock core (arch->getCore ());
@@ -340,11 +334,7 @@ bool resolve_sbpf_internal_call_target(
 		}
 		const Address entry = fc->getEntryAddress ();
 		if (entry.getSpace () && entry.getSpace ()->getName () == "syscall") {
-			return resolve_sbpf_internal_call_target_with_hint (
-				arch,
-				op->getAddr (),
-				entry.getOffset (),
-				out_target);
+			return resolve_sbpf_internal_call_target_at (arch, op->getAddr (), out_target);
 		}
 		RCoreLock core (arch->getCore ());
 		if (!entry.isInvalid () && is_executable_target (core, entry.getOffset ())) {
@@ -357,11 +347,7 @@ bool resolve_sbpf_internal_call_target(
 	if (!target->isConstant ()) {
 		return false;
 	}
-	return resolve_sbpf_internal_call_target_with_hint (
-		arch,
-		op->getAddr (),
-		target->getOffset (),
-		out_target);
+	return resolve_sbpf_internal_call_target_at (arch, op->getAddr (), out_target);
 }
 
 std::string resolve_sbpf_call_name(R2Architecture *arch, const PcodeOp *op) {
@@ -392,7 +378,7 @@ std::string resolve_sbpf_call_name(R2Architecture *arch, const PcodeOp *op) {
 				if (name) {
 					return std::string(name);
 				}
-				std::string internal = resolve_sbpf_internal_call_name(arch, op->getAddr(), entry.getOffset());
+				std::string internal = resolve_sbpf_internal_call_name(arch, op->getAddr());
 				if (!internal.empty()) {
 					return internal;
 				}
@@ -420,7 +406,7 @@ std::string resolve_sbpf_call_name(R2Architecture *arch, const PcodeOp *op) {
 		return from_reloc;
 	}
 	if (target && target->isConstant()) {
-		std::string internal = resolve_sbpf_internal_call_name(arch, call_addr, target->getOffset());
+		std::string internal = resolve_sbpf_internal_call_name(arch, call_addr);
 		if (!internal.empty()) {
 			return internal;
 		}
