@@ -205,14 +205,10 @@ bool read_solana_string_literal(
 		}
 		bool ok = r_io_vread_at(core->io, static_cast<ut64>(ptr), bytes.data(), static_cast<int>(len));
 		if (!ok) {
-			int final_rd = r_io_read_at(core->io, static_cast<ut64>(ptr), bytes.data(), static_cast<int>(len));
-			if (final_rd != static_cast<int>(len)) {
-				const ut64 paddr = r_io_v2p(core->io, static_cast<ut64>(ptr));
-				if (paddr != UT64_MAX) {
-					final_rd = r_io_read_at(core->io, paddr, bytes.data(), static_cast<int>(len));
-				}
-			}
-			ok = (final_rd == static_cast<int>(len));
+			// r_io_read_at() returns bool and reads virtual addresses, so it cannot be the physical fallback
+			const ut64 paddr = r_io_v2p(core->io, static_cast<ut64>(ptr));
+			ok = paddr != UT64_MAX
+				&& r_io_pread_at(core->io, paddr, bytes.data(), static_cast<int>(len)) == static_cast<int>(len);
 		}
 		if (!ok) {
 			return false;

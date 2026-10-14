@@ -75,20 +75,15 @@ bool read_virtual(RCore *core, ut64 addr, uint1 *buf, size_t len) {
 		return false;
 	}
 	const int ilen = static_cast<int>(len);
-	bool ok = r_io_vread_at(core->io, addr, buf, ilen);
-	if (ok) {
+	if (r_io_vread_at(core->io, addr, buf, ilen)) {
 		return true;
 	}
-	int rd = r_io_read_at(core->io, addr, buf, ilen);
-	if (rd == ilen) {
-		return true;
-	}
+	// r_io_read_at() returns bool and reads virtual addresses, so it cannot be the physical fallback
 	const ut64 paddr = r_io_v2p(core->io, addr);
 	if (paddr == UT64_MAX) {
 		return false;
 	}
-	rd = r_io_read_at(core->io, paddr, buf, ilen);
-	return rd == ilen;
+	return r_io_pread_at(core->io, paddr, buf, ilen) == ilen;
 }
 
 ut64 read_u64_le(const uint1 *p) {
