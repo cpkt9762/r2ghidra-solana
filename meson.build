@@ -23,6 +23,7 @@ r2ghidra_sources = [
   'src/SolanaGlobalPtrStringAnalyzer.cpp',
   'src/SolanaInputOffsetAnalyzer.cpp',
   'src/SolanaStringFromPtrLenAnalyzer.cpp',
+  'src/SolanaStructFieldHintAnalyzer.cpp',
   'src/SleighAnalValue.cpp',
   'src/SleighAsm.cpp',
   'src/SleighInstruction.cpp',
