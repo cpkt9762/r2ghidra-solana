@@ -230,7 +230,8 @@ static bool decode_sbpf_call_imm32(RCore *core, ut64 call_addr, uint32_t *imm) {
 		return false;
 	}
 	ut8 bytes[8] = {0};
-	if (r_io_read_at (core->io, call_addr, bytes, sizeof (bytes)) != static_cast<int> (sizeof (bytes))) {
+	// r_io_read_at() returns bool, not the number of bytes read
+	if (!r_io_read_at (core->io, call_addr, bytes, sizeof (bytes))) {
 		return false;
 	}
 	if (bytes[0] != 0x85) {
